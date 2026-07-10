@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.pytest_cache/
+
+# Machine-specific paths (see roots.env.example)
+roots.env
+
+# Precomputed embeddings — never checked in; see data/README.md
+data/embeddings/
+
+# Run artifacts
+outputs/
+*.DS_Store

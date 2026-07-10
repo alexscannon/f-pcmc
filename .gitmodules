@@ -1,0 +1,6 @@
+[submodule "reference/stam"]
+	path = reference/stam
+	url = https://github.com/CameronTaylorFL/stam
+[submodule "reference/pcmc"]
+	path = reference/pcmc
+	url = https://github.com/CameronTaylorFL/upl-benchmark

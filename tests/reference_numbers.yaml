@@ -1,0 +1,119 @@
+# Pinned known-good metrics for T6 (M1 sanity gate) and T14 (v1 regression pin).
+#
+# PROVENANCE: These are NOT the rounded numbers from writeups/consolidated.md or
+# writeups/05_experimental_results.md. They are read directly from a FRESH
+# reproduction run executed 2026-07-10 in this session, before any porting began:
+#
+#   cd msproject_misc/evaluation/continual && .venv/bin/python main.py \
+#     --paradigm {mahalanobis_hdbscan,knn_vmf} \
+#     --output-dir <fresh-dir> --force
+#   (config.yaml defaults used for everything else: random_seed=42, ind_warmup_count=1000,
+#    oracle_mode=none, stream_order=random, full stream — no --limit)
+#
+# This fresh run's numbers are BYTE-IDENTICAL to the pre-existing
+# outputs/continual/{mahalanobis_hdbscan,knn_vmf}_seed42_full/results_summary.json
+# generated earlier — confirming the pipeline is deterministic and these values are
+# a stable target, not an artifact of one run.
+#
+# Source repo: msproject_misc, HEAD e723f028d84846b4a244fb3a30c9456f817b16c6 (2026-07-05).
+# evaluation/continual/{config.py,config.yaml,evaluation.py,main.py,stream.py} had
+# UNCOMMITTED local edits at run time (an opt-in stream_order ablation feature;
+# default stream_order=random preserves prior behavior — confirmed by diff and by
+# the byte-identical match above). git_blob_hash fields below are `git hash-object`
+# content hashes (valid for uncommitted content), not commit hashes, for exactly
+# this reason. See docs/ASSETS.md §2/§6 for the full module inventory.
+#
+# KNOWN DISCREPANCY (flag for human review before use): writeups/05_experimental_results.md:82
+# and writeups/consolidated.md:371 state "Overall accuracy | 72.4%" for
+# mahalanobis_hdbscan. Every computed artifact (this fresh run, the pre-existing
+# results_summary.json, evaluation/continual/outputs/phase_B_report.md,
+# evaluation/continual/outputs/phase_C_report.md, evaluation/continual/CHANGES.md:172)
+# agrees on 0.740 (74.03%), not 72.4%. The paper draft's "72.4%" appears to be a
+# transcription error, not a different (older) pipeline result. TASKS.md:312's stated
+# tolerance "overall accuracy 72.4% ± 0.5" is therefore WRONG and will make
+# test_v1_regression_pin fail against a correctly-ported v1 — this file pins the
+# verified value (0.7403) instead. Recommend TASKS.md:312 be corrected; not edited
+# here since docs/ and this file's *content* are the coding agent's immutable specs,
+# but the discrepancy must be resolved by a human before T14 is attempted.
+
+t6_m1_gate:
+  description: >
+    Batch/streaming knn_vmf detection AUROC on P1-equivalent data (full continual
+    stream, IND test vs near+far OOD), min-over-concepts-equivalent novelty score.
+    T6's LTM-only routing must reproduce this within ±0.01 overall, ±0.015 stratified.
+  source:
+    paradigm: knn_vmf
+    command: "uv run python main.py --paradigm knn_vmf --seed 42"
+    output_file: evaluation/continual/outputs/continual/knn_vmf_seed42_full/results_summary.json
+    fresh_repro_output_dir: /home/alex/data/evaluation/dinov3_l/2/continual_repro_knn_vmf
+    git_blob_hashes:
+      evaluation/continual/paradigms/knn_vmf.py: 7ef929c11003404df4557ce8af108c339255d044
+      evaluation/continual/paradigms/vmf_dpmm.py: 47d7412fdd105d00faf2fe63a8465bfd81cfbc80
+      evaluation/continual/paradigms/base.py: 7501a5169d555fb3eef054b8d63c9f2c369efb06
+      evaluation/continual/main.py: e9b17c9eb6080dd4410fa198d68ee3354d9754aa   # uncommitted edit
+      evaluation/continual/stream.py: b3051c55ca5c21fc894f8632423a4d9c81884251  # uncommitted edit
+      evaluation/continual/ind_model.py: 54315fbb27a80673adf8b5477026e3f0f1ba291a
+      evaluation/continual/clustering.py: 55a9ede41837bc3e7172f91f9d1c5d794073d531
+      evaluation/continual/evaluation.py: 2d0d7e5e279483d5d8cd6892b89169c3339a8031  # uncommitted edit
+      evaluation/continual/config.py: b0f9acb9f96ab97b39105bbab291e4a78c32ca6c    # uncommitted edit
+      evaluation/continual/config.yaml: 33154bf437d5278f68d8423b697a33c9d19117e1  # uncommitted edit
+    random_seed: 42
+    stream_length: 13326
+    n_ind_test_in_stream: 10250   # metadata field name in source; includes IND_REAL + IND_SYNTHETIC evaluated for detection
+    n_ood_in_stream: 3076         # 500 near + 2576 far
+    threshold_tau: 0.6165391407194315
+  metrics:
+    auroc_all_ood: 0.8592309302546861
+    auroc_near_ood: 0.7526271219512195   # novel_subclasses.pt, 500 examples, 6 classes
+    auroc_far_ood: 0.8799226632328436    # novel_superclasses.pt, 2576 examples, 43 classes
+  tolerance:
+    all_ood: 0.01
+    near_ood: 0.015
+    far_ood: 0.015
+
+t14_v1_regression_pin:
+  description: >
+    v1 = mahalanobis_hdbscan paradigm (README/CLAUDE.md's "regression baseline";
+    NOT a standalone single-file pipeline — see docs/ASSETS.md §2). Headline P1 numbers.
+  source:
+    paradigm: mahalanobis_hdbscan
+    command: "uv run python main.py --paradigm mahalanobis_hdbscan --seed 42"
+    output_file: evaluation/continual/outputs/continual/mahalanobis_hdbscan_seed42_full/results_summary.json
+    fresh_repro_output_dir: /home/alex/data/evaluation/dinov3_l/2/continual_repro_mahalanobis_hdbscan
+    git_blob_hashes:
+      evaluation/continual/paradigms/mahalanobis_hdbscan.py: 1694e84b711689f74564e06f1974e906d7de3006
+      evaluation/continual/paradigms/base.py: 7501a5169d555fb3eef054b8d63c9f2c369efb06
+      evaluation/continual/paradigms/factory.py: da9118af6302ac0758cb4fb042113e1b5a963d8b
+      evaluation/continual/main.py: e9b17c9eb6080dd4410fa198d68ee3354d9754aa   # uncommitted edit
+      evaluation/continual/stream.py: b3051c55ca5c21fc894f8632423a4d9c81884251  # uncommitted edit
+      evaluation/continual/ind_model.py: 54315fbb27a80673adf8b5477026e3f0f1ba291a
+      evaluation/continual/clustering.py: 55a9ede41837bc3e7172f91f9d1c5d794073d531
+      evaluation/continual/evaluation.py: 2d0d7e5e279483d5d8cd6892b89169c3339a8031  # uncommitted edit
+      evaluation/continual/config.py: b0f9acb9f96ab97b39105bbab291e4a78c32ca6c    # uncommitted edit
+      evaluation/continual/config.yaml: 33154bf437d5278f68d8423b697a33c9d19117e1  # uncommitted edit
+    random_seed: 42
+    stream_length: 13326
+  metrics:
+    detection_auroc_all_ood: 0.8495200926131499
+    detection_auroc_near_ood: 0.7583830243902441   # not in TASKS.md draft; extra context
+    detection_auroc_far_ood: 0.8672097409483411    # not in TASKS.md draft; extra context
+    fpr_at_95: 0.6204   # 4-decimal source (phase_B_report.md); corroborates PRD.md:25 "FPR@95 degraded to 0.62"
+    overall_accuracy: 0.7402821551853519   # == 74.03%. TASKS.md:312 says "72.4% ± 0.5" — WRONG, see header note above.
+    n_correct: 9865
+    n_evaluated: 13326
+    accuracy_breakdown:
+      ind_classification: 0.9192857888691657        # 8804/9577 — matches writeups/consolidated.md:366 "91.9%"
+      ood_as_ind_classification: 0.14126880313930673 # 216/1529
+      cluster_classification: 0.9147286821705426     # 236/258
+      buffer_drain_classification: 0.3103975535168196 # 609/1962 — matches PRD.md:28 "31% accuracy"
+    n_promoted_clusters: 14
+    end_of_stream_cluster_purities_sorted:
+      [0.1038, 0.1649, 0.3174, 0.3307, 0.5128, 0.5652, 0.5714, 0.65, 0.7458, 0.7843, 0.9595, 1.0, 1.0, 1.0]
+    end_of_stream_median_purity: 0.6107   # median of the 14 values above (even count -> mean of two middle values)
+    residual_ood_buffer_size: 1962
+  tolerance:
+    detection_auroc_all_ood: 0.005
+    overall_accuracy: 0.005   # i.e. ±0.5 accuracy points, same magnitude as TASKS.md draft, just around the correct center
+    n_promoted_clusters: 0
+    end_of_stream_median_purity: 0.02
+    residual_ood_buffer_size: 0

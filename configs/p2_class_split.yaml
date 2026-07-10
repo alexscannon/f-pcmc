@@ -1,0 +1,169 @@
+# P2 (O-UCL phased stream) T0/held-out class split — PRD §7.1.
+#
+# DECISION (recorded, not left to the agent's seed): the 15 CIFAR-100 subclasses
+# under aquatic_mammals, fish, and small_mammals are EXCLUDED from the held-out
+# draw and always remain in T0.
+#
+# WHY: the fixed near-OOD synthetic pool (novel_subclasses.pt, 6 classes, 500
+# images) is anchored entirely to these 3 superclasses (README: "3 existing
+# superclasses (aquatic_mammals, fish, small_mammals)"). "Near-OOD" is only a
+# meaningful semantic-distance condition at T0 if the model's *initial* (T0)
+# vocabulary actually contains sibling subclasses of those superclasses — the PRD's
+# near-OOD framing is about distance from the model's original vocabulary, not
+# from whatever it has incrementally relearned by the time the near-OOD phase
+# runs later in the P2 schedule. A blind 80/20 draw over all 100 subclasses can
+# (and with 3/20 superclass-probability, often will) pull most or all of a
+# superclass's 5 subclasses into the held-out 20, gutting T0's anchor for that
+# superclass and quietly changing what "near-OOD" is measuring run to run.
+#
+# ALTERNATIVE CONSIDERED: stratify to leave >=3 of 5 subclasses per superclass
+# in T0 (i.e. cap held-out draws at <=2 per superclass) instead of full exclusion.
+# Rejected: full exclusion is simpler, removes the confound entirely rather than
+# bounding it, and costs only 15 of 100 candidate slots in the held-out draw pool
+# (which still has 85 eligible subclasses for 20 slots — no scarcity issue).
+#
+# ALGORITHM (deterministic, reproducible without depending on numpy's RNG
+# internals across versions -- the frozen `held_out` list below is the source of
+# truth; the algorithm is documented for audit only):
+#   1. protected_subclasses = union of cifar100_super_subclass_mapping.json[sc]
+#      for sc in {aquatic_mammals, fish, small_mammals}   (15 subclasses)
+#   2. eligible = sorted(all_100_subclasses - protected_subclasses)   (85 subclasses)
+#   3. rng = numpy.random.RandomState(42)  (project convention: seed 42 throughout)
+#   4. idx = rng.choice(len(eligible), size=20, replace=False)
+#   5. held_out = sorted(eligible[i] for i in idx)
+#   6. t0 = sorted(all_100_subclasses - held_out)   # == protected_subclasses (15) + 65 more
+#
+# Computed 2026-07-10 against msproject_misc/cifar100_super_subclass_mapping.json
+# (git blob c9a1e... n/a — file is untracked config data at repo root, not in git;
+# content reproduced verbatim in protected_superclass_subclasses below for audit).
+
+protected_superclasses: [aquatic_mammals, fish, small_mammals]
+
+protected_superclass_subclasses:
+  aquatic_mammals: [beaver, dolphin, otter, seal, whale]
+  fish: [aquarium_fish, flatfish, ray, shark, trout]
+  small_mammals: [hamster, mouse, rabbit, shrew, squirrel]
+
+seed: 42
+
+held_out_20:
+  - apple
+  - bee
+  - bridge
+  - butterfly
+  - chair
+  - cockroach
+  - kangaroo
+  - lamp
+  - lobster
+  - maple_tree
+  - orange
+  - palm_tree
+  - plate
+  - poppy
+  - snake
+  - streetcar
+  - tank
+  - train
+  - tulip
+  - wolf
+
+held_out_by_superclass_sanity_check:
+  # None of the protected superclasses appear here (by construction). Included
+  # so a config-load-time assertion can catch drift if this file is hand-edited.
+  fruit_and_vegetables: 2
+  insects: 3
+  large_man_made_outdoor_things: 1
+  household_furniture: 1
+  large_omnivores_and_herbivores: 1
+  household_electrical_devices: 1
+  non_insect_invertebrates: 1
+  trees: 2
+  food_containers: 1
+  flowers: 2
+  reptiles: 1
+  vehicles_2: 2
+  vehicles_1: 1
+  large_carnivores: 1
+
+t0_80:
+  - aquarium_fish
+  - baby
+  - bear
+  - beaver
+  - bed
+  - beetle
+  - bicycle
+  - bottle
+  - bowl
+  - boy
+  - bus
+  - camel
+  - can
+  - castle
+  - caterpillar
+  - cattle
+  - chimpanzee
+  - clock
+  - cloud
+  - couch
+  - crab
+  - crocodile
+  - cup
+  - dinosaur
+  - dolphin
+  - elephant
+  - flatfish
+  - forest
+  - fox
+  - girl
+  - hamster
+  - house
+  - keyboard
+  - lawn_mower
+  - leopard
+  - lion
+  - lizard
+  - man
+  - motorcycle
+  - mountain
+  - mouse
+  - mushroom
+  - oak_tree
+  - orchid
+  - otter
+  - pear
+  - pickup_truck
+  - pine_tree
+  - plain
+  - porcupine
+  - possum
+  - rabbit
+  - raccoon
+  - ray
+  - road
+  - rocket
+  - rose
+  - sea
+  - seal
+  - shark
+  - shrew
+  - skunk
+  - skyscraper
+  - snail
+  - spider
+  - squirrel
+  - sunflower
+  - sweet_pepper
+  - table
+  - telephone
+  - television
+  - tiger
+  - tractor
+  - trout
+  - turtle
+  - wardrobe
+  - whale
+  - willow_tree
+  - woman
+  - worm
