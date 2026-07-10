@@ -100,6 +100,8 @@ Parallelizable: {T12}, {T14} can proceed alongside T2–T10. Everything else is 
 
 **Done when:** scorer interface frozen (later tasks import, never modify).
 
+*(As built 2026-07-10: the frozen interface is `Scorer.{score, accepts, margin, score_detail, select}` in `fpcmc/scorers.py` — `score_detail` carries the FR-4.2 fallback flag and the winning sub-scorer (`via`); `select` is FR-4.3 best-margin assignment with lexicographic concept_id tie-break. Three owner-approved deviations: per-sub-scorer thresholds `tau`+`tau_vmf` on `Concept`; margins normalized by |τ|; composed scalar score = the knn_ref sub-score. See docs/CHANGES.md T2 and the dated notes at PRD FR-1/FR-4.3/FR-5.)*
+
 ---
 
 ## Task 3 — Concept dataclass, reservoir reference sets, centroid dynamics
@@ -107,7 +109,7 @@ Parallelizable: {T12}, {T14} can proceed alongside T2–T10. Everything else is 
 **Depends on:** T2  **PRD refs:** FR-1.1–1.4, FR-3.2 (seeding shape only)
 
 **Scope**
-Complete `fpcmc/concepts.py`: full `Concept` dataclass per PRD FR-1; `add_observation(z, step)` implementing reservoir sampling at `K_max`, match/window bookkeeping (`match_windows` uses `step // window_W`), EMA centroid update for STM with re-normalization, frozen centroid for LTM; `Concept.seed(z, step, tau_prior)` constructor for singletons; merge-lineage fields.
+Complete `fpcmc/concepts.py`: full `Concept` dataclass per PRD FR-1; `add_observation(z, step)` implementing reservoir sampling at `K_max`, match/window bookkeeping (`match_windows` uses `step // window_W`), EMA centroid update for STM with re-normalization, frozen centroid for LTM; `Concept.seed(z, step, tau_prior)` constructor for singletons; merge-lineage fields. *(2026-07-10: the T2 stub already carries the owner-approved `tau_vmf` field — preserve it; seeding bootstraps both `tau` and `tau_vmf` from their respective per-sub-scorer priors (PRD FR-5 note). The concept owner must also keep the cached Banerjee κ valid — `VmfScorer` reads `concept.kappa` and raises on a non-finite value once ref_set ≥ n_vmf_min (`fpcmc.scorers.estimate_kappa` is the estimator). The κ update cadence — per-observation vs T4's lazy ≥25% trigger — is unspecified by the PRD; T3 should raise it before implementing.)*
 
 **Tests**
 - [U] `test_reservoir_uniformity` — stream 1,000 items into K_max=64 reservoir, repeat 2,000 trials; per-item inclusion frequency within 3σ of 64/1000 (chi-square p > 0.01). This validates the exact replacement rule in FR-1.1.
@@ -125,7 +127,7 @@ Complete `fpcmc/concepts.py`: full `Concept` dataclass per PRD FR-1; `add_observ
 **Depends on:** T3  **PRD refs:** FR-5.1–5.4
 
 **Scope**
-`fpcmc/thresholds.py`: leave-one-out per-concept score percentile (`q=95` default); shrinkage `τ_c = w·τ_emp + (1−w)·τ_prior`, `w = n/(n+n_shrink)`; global prior computed once from pooled T0 LOO scores (FR-5.3); lazy recomputation trigger when ref_set changed ≥ 25% since last computation (track a dirty counter on `Concept`); `recompute_on_promotion(concept)` hook.
+`fpcmc/thresholds.py`: leave-one-out per-concept score percentile (`q=95` default); shrinkage `τ_c = w·τ_emp + (1−w)·τ_prior`, `w = n/(n+n_shrink)`; global prior computed once from pooled T0 LOO scores (FR-5.3); lazy recomputation trigger when ref_set changed ≥ 25% since last computation (track a dirty counter on `Concept`); `recompute_on_promotion(concept)` hook. *(2026-07-10: per the T2 owner-approved threshold split, all of the above runs per sub-scorer under `scorer=knn_vmf` — LOO/shrinkage/prior computed under knn_ref → `tau` and under vmf → `tau_vmf`; the FR-5.3 global prior is a per-sub-scorer pair. See PRD FR-5 note and docs/CHANGES.md T2.)*
 
 **Tests**
 - [U] `test_loo_hand_case` — 5-point ref_set in 2-D with hand-computed knn_ref LOO scores (k_ref=1); percentile matches manual arithmetic exactly.
@@ -143,7 +145,7 @@ Complete `fpcmc/concepts.py`: full `Concept` dataclass per PRD FR-1; `add_observ
 **Depends on:** T4  **PRD refs:** FR-9 (loop body only, no periodic hooks), FR-3.3 routing order
 
 **Scope**
-`fpcmc/concepts.py::ConceptStore` — holds LTM + STM registries, exposes `route(z, step) -> RoutingResult` implementing exactly the FR-9 decision cascade: (1) LTM ∪ mature-STM acceptance set → best-margin assignment; (2) else immature-STM acceptance → best-margin assignment, prediction "unknown"; (3) else seed new STM concept, prediction "unknown". `RoutingResult` carries: prediction, concept_id, tier used (1/2/3), score, margin — everything the event log needs. Vectorize scoring across concepts (single matrix op per tier) for NFR-1.
+`fpcmc/concepts.py::ConceptStore` — holds LTM + STM registries, exposes `route(z, step) -> RoutingResult` implementing exactly the FR-9 decision cascade: (1) LTM ∪ mature-STM acceptance set → best-margin assignment; (2) else immature-STM acceptance → best-margin assignment, prediction "unknown"; (3) else seed new STM concept, prediction "unknown". `RoutingResult` carries: prediction, concept_id, tier used (1/2/3), score, margin — everything the event log needs. Vectorize scoring across concepts (single matrix op per tier) for NFR-1. *(2026-07-10: `fpcmc.scorers.Scorer.select()`/`score_detail()` already provide per-tier best-margin assignment with the deterministic tie-break plus the `via`/`fallback` metadata the event log and A5 ablation need — consume them (or reproduce their exact semantics in the vectorized path, guarded by `test_vectorized_matches_loop`) rather than reimplementing differently.)*
 
 **Tests**
 - [U] `test_routing_tier_order` — craft z accepted by both a mature-STM concept and an immature-STM concept with a *better* margin: tier-1 concept must win (immature cannot claim traffic; FR-3.3).
@@ -161,7 +163,7 @@ Complete `fpcmc/concepts.py`: full `Concept` dataclass per PRD FR-1; `add_observ
 **Depends on:** T5  **PRD refs:** FR-2, PRD §9 M1 gate
 
 **Scope**
-`fpcmc/init.py::initialize_ltm(pool, labels, config) -> ConceptStore` — one LTM concept per T0 class: normalized class-mean centroid, reservoir-sampled ref_set, τ via FR-5.1, κ via FR-4.2; then global prior (FR-5.3).
+`fpcmc/init.py::initialize_ltm(pool, labels, config) -> ConceptStore` — one LTM concept per T0 class: normalized class-mean centroid, reservoir-sampled ref_set, τ via FR-5.1, κ via FR-4.2; then global prior (FR-5.3). *(2026-07-10: init populates `tau`, `tau_vmf`, and `kappa` per concept, and the global prior pair — see the T2 threshold-split notes at PRD FR-1/FR-5. In `test_m1_gate`, "min-over-concepts knn_vmf score" is the composed scorer's scalar, which by owner decision is the knn_ref sub-score.)*
 
 **Tests**
 - [U] `test_init_fixture` — 8-class fixture: 8 LTM concepts; each centroid within 3° of true class mean; every τ finite and positive; provenance "initial".
