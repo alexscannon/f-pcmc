@@ -67,7 +67,7 @@ F-PCMC replaces the v1 streaming pipeline. The v1 pipeline is retained **as a ba
 
 ## 3. Existing Assets (reuse, do not rewrite)
 
-The coding agent must integrate with, not duplicate, the following existing modules. Exact paths to be filled in from the current repo; the interfaces below are contracts.
+The coding agent must integrate with, not duplicate, the following existing modules. Exact paths to be filled in from the current repo; the interfaces below are contracts. *(Filled in 2026-07-10: exact paths, schemas, and module inventory live in `docs/ASSETS.md`; the four `.pt` files resolve at load time via `roots.env` → `EMBEDDINGS_DIR` — contract in `data/README.md`. Ported snapshots live read-only under `lib/`.)*
 
 | Asset | Contract |
 |---|---|
@@ -317,6 +317,8 @@ fpcmc/
   configs/           # one YAML per run in §7.4
   tests/
 ```
+
+*As built at T0 (owner-confirmed 2026-07-10): `eval/`, `baselines/`, `configs/`, `tests/` are top-level siblings of `fpcmc/` — the nesting above was a formatting artifact — joined by top-level `lib/` (frozen vendored source-project modules), `reference/` (read-only pinned submodules), `docs/`, and `data/` (contract README only; embeddings resolve externally via `roots.env`, never a local `data/embeddings/`).*
 
 - **M1 (days 1–3):** `concepts.py`, `scorers.py`, thresholds; unit tests green. LTM-only routing reproduces batch knn_vmf detection AUROC on P1 within ±0.01 (sanity gate).
 - **M2 (days 4–6):** STM dynamics, promotion, wake loop; end-to-end P1 run with logging.
