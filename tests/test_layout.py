@@ -42,6 +42,9 @@ REQUIRED_FILES = [
     "docs/PRD_frozen_encoder_pcmc.md",
     "docs/TASKS_frozen_encoder_pcmc.md",
     "docs/ASSETS.md",
+    # T2 — per-concept scorers + Concept stub
+    "fpcmc/scorers.py",
+    "fpcmc/concepts.py",
 ]
 
 
