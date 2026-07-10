@@ -42,7 +42,7 @@ Parallelizable: {T12}, {T14} can proceed alongside T2–T10. Everything else is 
 1. Create repo layout exactly as PRD §9 (`fpcmc/`, `baselines/`, `configs/`, `tests/`, `eval/`), plus:
    - `lib/` — ported existing modules (scorers, UMAP+HDBSCAN wrapper, metrics utilities) copied verbatim from the current project; document source commit hash in `lib/PROVENANCE.md`.
    - `reference/` — **optional** git submodules for the STAM repo and PCMC repo, read-only, consultation only. If the user opts to exclude them, create `reference/README.md` citing both papers/repos instead. Either way the import guard below must exist.
-   - `data/embeddings/` — gitignored; `data/README.md` documents the five expected `.pt` files and their schemas (PRD §3).
+   - `data/embeddings/` — gitignored; `data/README.md` documents the five expected `.pt` files and their schemas (PRD §3). *(As built, 2026-07-10: there is no local `data/embeddings/` — embeddings resolve externally via `roots.env` → `EMBEDDINGS_DIR`; `data/README.md` is the contract, `docs/ASSETS.md` §1 the decision record.)*
 2. Config system: YAML → frozen dataclass `FPCMCConfig` containing every parameter from PRD §8, with schema validation (unknown keys are errors) and `to_yaml()` round-trip. Every run artifact embeds the resolved config.
 3. Tooling: `pyproject.toml` (numpy, scipy, scikit-learn, umap-learn, hdbscan, pyyaml, pytest, pytest-mock; pin versions), `pytest.ini` with `slow` marker, deterministic-seed helper `fpcmc/rng.py` (single `np.random.Generator` factory; no module-level RNG anywhere).
 
@@ -68,14 +68,14 @@ Parallelizable: {T12}, {T14} can proceed alongside T2–T10. Everything else is 
    - sampled "T0" pools, "IND test" pools, and "novel" pools with ground-truth labels;
    - a `make_stream(schedule)` method producing deterministic interleaved streams with phase schedules (used later by golden tests);
    - analytic helpers: true class means, true pairwise angular separations.
-3. `tests/fixtures/golden_stream.py` — one frozen configuration of the vMF world (`seed=7, k_known=8, k_novel=3`, novel classes recurring across ≥4 windows, one additional "outlier burst" class that appears only in a single contiguous run of 15 examples). Serialize to a committed `.npz` so the golden stream is byte-stable across machines.
+3. `tests/fixtures/golden_stream.py` — one frozen configuration of the vMF world (`seed=7, k_known=8, k_novel=3`, novel classes recurring across ≥4 windows, one additional "outlier burst" class that appears only in a single contiguous run of 15 examples). Serialize to a committed `.npz` so the golden stream is byte-stable across machines. *(As built, owner-approved 2026-07-10: the frozen 2,000-step stream additionally carries 25 one-off distractor outliers after the burst — guaranteeing STM/LRU eviction pressure for T8/T11 under a golden-run config with `stm_capacity ≤ ~25` — plus the frozen T0/test pools, true means/κ, and window/segment metadata; sha256 pinned in `golden_stream.py`. See docs/CHANGES.md T1.)*
 
 **Tests**
 - [U] `test_fixture_determinism` — same seed ⇒ identical arrays; different seed ⇒ different.
 - [U] `test_fixture_separations` — sampled class means match requested angular separations within tolerance; per-class sample mean direction within 5° of true mean for n=200.
 - [U] `test_l2_on_load` — all loaded/generated embeddings have unit norm (atol 1e-6); double-normalization is a no-op.
 - [U] `test_golden_stream_frozen` — hash of the committed `.npz` matches a pinned constant.
-- [I] `test_real_pool_schemas` — for each of the five real `.pt` files: expected counts (50,000 / 10,000 / 250 / 500 / 2,576), D=1024, label arrays align with class maps, no NaNs. Skipped with a clear message if `data/embeddings/` absent.
+- [I] `test_real_pool_schemas` — for each of the five real `.pt` files: expected counts (50,000 / 10,000 / 250 / 500 / 2,576), D=1024, label arrays align with class maps, no NaNs. Skipped with a clear message if `data/embeddings/` absent. *(Updated 2026-07-10: the five pools live in four files under the roots.env-resolved `EMBEDDINGS_DIR`; the skip condition is "`roots.env` missing/unset or the resolved files not found" — there is no local `data/embeddings/`. See `data/README.md`.)*
 
 **Done when:** all above green; fixture module documented well enough that later tasks use it without modification.
 
@@ -204,7 +204,7 @@ Extend `ConceptStore`: STM capacity `Δ`, LRU eviction on `last_matched_at` (tie
   - separation: candidate seeded inside a known LTM class (its centroid accepted by that LTM τ);
   - recurrence: 40 matches all within one window (the fixture "outlier burst" class).
 - [U] `test_promotion_happy_path` — recurring fixture novel class: promoted; assert atomically (single hook call): status=LTM, centroid frozen thereafter, τ ≠ pre-promotion shrunk τ and equals FR-5.1 recompute, STM occupancy decremented, log record complete.
-- [U] `test_outlier_burst_never_promotes` — golden-world burst class run through 2,000 steps: never promoted, eventually LRU-evicted (assert eviction record exists for it). **This is the recurring-novelty-vs-outlier discrimination test.**
+- [U] `test_outlier_burst_never_promotes` — golden-world burst class run through 2,000 steps: never promoted, eventually LRU-evicted (assert eviction record exists for it). **This is the recurring-novelty-vs-outlier discrimination test.** *(2026-07-10: the golden stream's 25 planted distractor outliers supply the STM fill — run with a reduced `stm_capacity` (≤ ~25) so LRU pressure actually exists.)*
 - [U] `test_separation_uses_per_concept_tau` — same candidate promotes/blocks when only the nearest LTM concept's τ is tightened/loosened (proves criterion 3 reads per-concept thresholds, not a global one).
 - [U] `test_promotion_idempotent` — evaluator on an already-promoted concept is a no-op.
 
@@ -255,14 +255,14 @@ Extend `ConceptStore`: STM capacity `Δ`, LRU eviction on `last_matched_at` (tie
 - [U] `test_log_schema_complete` — every record validates against a JSON schema; every mutation of the store during a run has a corresponding record (instrument the store with a mutation counter and reconcile).
 - [U] `test_byte_determinism` — two runs, same config+seed: byte-identical JSONL (NFR-3/FR-9.2). Third run with seed+1: differs.
 - [U] `test_replay_reconstruction` — replayed final state equals live final state (concept ids, statuses, match_counts, lineage; centroids atol 1e-9).
-- [G] **`test_golden_stream_end_to_end`** — run the frozen golden stream (8 known, 3 recurring novel, 1 outlier-burst class):
+- [G] **`test_golden_stream_end_to_end`** — run the frozen golden stream (8 known, 3 recurring novel, 1 outlier-burst class, plus 25 one-off distractor outliers — owner-approved 2026-07-10):
   - all 3 recurring novel classes promoted, each exactly once (fragmentation index = 1.0);
   - burst class: zero promotions, ≥ 1 eviction record;
   - end-of-stream purity of each promoted concept ≥ 0.95 against fixture ground truth;
   - post-promotion samples of promoted classes routed at tier 1 (promotion-aware routing, measured: ≥ 90% of that class's post-promotion arrivals);
   - known-class expanding accuracy ≥ 0.95 throughout;
   - "unknown" residual at end < 5% of novel-class examples.
-  **This test is the executable specification of the whole system.** If any assertion fails, the responsible mechanism's task is reopened.
+  **This test is the executable specification of the whole system.** If any assertion fails, the responsible mechanism's task is reopened. *(Golden-run config note, 2026-07-10: use `stm_capacity ≤ ~25` so the planted distractors create the LRU pressure behind the burst-eviction assertion. Distractors are one-off outliers, not novel classes — they enter none of the promotion/purity/coverage/unknown-residual denominators.)*
 - [I] `test_runtime_budget` — P1-sized run (13,326 real embeddings) completes within NFR-1 budget; log wall-time per 1k steps in the report.
 
 ---
@@ -272,13 +272,13 @@ Extend `ConceptStore`: STM capacity `Δ`, LRU eviction on `last_matched_at` (tie
 **Depends on:** T1  **PRD refs:** §7.1
 
 **Scope**
-`fpcmc/protocols.py` — `build_p1(config, seed)` reproducing the v1 stream construction exactly (1,000 IND warmup; shuffled interleave of 9,000 IND test + 250 synthetic IND + 500 near + 2,576 far); `build_p2(config, seed)` phased O-UCL stream per PRD (T0 = 80 classes; phase schedule for 20 held-out CIFAR classes, near-OOD, far-OOD by superclass; classes cease post-phase; 30% past-class interleave; 4 checkpoints/phase). Emits a `StreamManifest` (per-index: pool, class, phase) consumed by the runner and the eval harness.
+`fpcmc/protocols.py` — `build_p1(config, seed)` reproducing the v1 stream construction exactly (1,000 IND warmup; shuffled interleave of 9,000 IND test + 250 synthetic IND + 500 near + 2,576 far); `build_p2(config, seed)` phased O-UCL stream per PRD (T0 = 80 classes; phase schedule for 20 held-out CIFAR classes, near-OOD, far-OOD by superclass; classes cease post-phase; 30% past-class interleave; 4 checkpoints/phase). Emits a `StreamManifest` (per-index: pool, class, phase) consumed by the runner and the eval harness. *(2026-07-10: the 80/20 held-out split is the frozen, human-decided list in `configs/p2_class_split.yaml` — `build_p2` consumes it verbatim, never redraws it; see CLAUDE.md source-of-truth #5 and the file's header rationale.)*
 
 **Tests**
 - [U] `test_p2_fixture_schedule` — P2 builder on the fixture world: class introduction steps match schedule; zero occurrences of any class after its phase (hard assert); past-class interleave fraction = 0.30 ± 0.02 per phase; checkpoints at 1/4, 2/4, 3/4, 4/4 of each phase.
 - [U] `test_protocol_determinism` — identical manifests for same seed; disjoint shuffles across seeds {42,43,44}.
 - [I] `test_p1_matches_v1` — P1 composition: exact counts per pool; warmup contains only real IND test; total 13,326. If the original v1 code exposes its ordering (seed 42), assert index-level equality; otherwise assert distributional identity (counts per pool per 1k-step bucket).
-- [I] `test_p2_real_partition` — the 80/20 CIFAR class partition is deterministic, disjoint, and covers all 100; near-OOD phases contain exactly the 6 near classes; far phases partition the 43 far classes by superclass with none repeated.
+- [I] `test_p2_real_partition` — the 80/20 CIFAR class partition is deterministic, disjoint, and covers all 100; near-OOD phases contain exactly the 6 near classes; far phases partition the 43 far classes by superclass with none repeated. *(2026-07-10: the partition must equal the frozen `configs/p2_class_split.yaml` list exactly.)*
 
 ---
 

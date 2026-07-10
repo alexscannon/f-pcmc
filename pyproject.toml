@@ -16,6 +16,12 @@ dependencies = [
     "scikit-learn==1.8.0",
     "umap-learn==0.5.11",
     "pyyaml==6.0.2",
+    # torch is used ONLY to torch.load the precomputed .pt embedding files
+    # (T1 data layer). 2.11.0 matches the source venv that produced
+    # tests/reference_numbers.yaml (2.11.0+cu126); served from the CPU-only
+    # wheel index (see [tool.uv.sources]) — this is a CPU-only project
+    # (PRD §2.2) and torch.load is build-independent.
+    "torch==2.11.0",
 ]
 
 [dependency-groups]
@@ -23,6 +29,14 @@ dev = [
     "pytest==8.4.1",
     "pytest-mock==3.14.1",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
