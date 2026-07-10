@@ -34,6 +34,11 @@ REQUIRED_FILES = [
     "tests/reference_numbers.yaml",
     "lib/PROVENANCE.md",
     "data/README.md",
+    # T1 — data layer + synthetic fixtures
+    "fpcmc/data.py",
+    "tests/fixtures/vmf_world.py",
+    "tests/fixtures/golden_stream.py",
+    "tests/fixtures/golden_stream.npz",
     "docs/PRD_frozen_encoder_pcmc.md",
     "docs/TASKS_frozen_encoder_pcmc.md",
     "docs/ASSETS.md",
