@@ -5,10 +5,17 @@ Extended as tasks land. Present from T0:
     vendoring guard from Task 0);
   - invariant 6: frozen encoder — no torch autograd / optimizers / model
     forward passes anywhere under fpcmc/.
+Added at T3:
+  - invariant 4 (immutability half): concept_id can never be reassigned or
+    deleted. The uniqueness-across-a-run half needs a ConceptStore and lands
+    with T5.
 """
 
 import ast
 from pathlib import Path
+
+import numpy as np
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -86,3 +93,19 @@ def test_no_learning_in_fpcmc():
             elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "backward":
                 violations.append(f"{path}:{node.lineno} calls .backward()")
     assert not violations, "no learning allowed in fpcmc/ (PRD §2.2, CLAUDE.md):\n" + "\n".join(violations)
+
+
+# Invariant 4 (T3+): concept-id immutability. Run-wide uniqueness is asserted
+# once ConceptStore exists (T5).
+
+
+def test_concept_id_immutability_invariant():
+    from fpcmc.concepts import Concept
+
+    z = np.array([1.0, 0.0])
+    concept = Concept(concept_id="ltm_000", centroid=z, ref_set=z[None], tau=0.5, kappa=float("nan"))
+    with pytest.raises(AttributeError):
+        concept.concept_id = "ltm_001"
+    with pytest.raises(AttributeError):
+        del concept.concept_id
+    assert concept.concept_id == "ltm_000"
