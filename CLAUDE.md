@@ -24,8 +24,9 @@ If the PRD and task plan ever conflict, stop and ask; do not resolve specificati
 - **No ground-truth leakage.** Nothing under `fpcmc/` may import from `eval/`'s ground-truth mapping or receive labels at runtime. The invariant tests enforce this; design accordingly.
 - **No learning.** No torch autograd, optimizers, or model forward passes anywhere in `fpcmc/`. Embeddings are precomputed inputs.
 - **Reference code is read-only.** `reference/stam` and `reference/pcmc` are populated git submodules (STAM, PCMC/`upl-benchmark`), pinned at fixed commits — do not `git submodule update --remote` them or edit their contents. You may read them (and the source papers at `research_papers/`) to understand conventions, but nothing in `fpcmc/`, `eval/`, or `tests/` may import from `reference/`. `test_no_reference_imports` enforces this.
-- **Determinism everywhere.** All randomness flows through `fpcmc/rng.py` generators seeded from config. No module-level RNG, no unseeded library calls (UMAP must receive `random_state`). `test_byte_determinism` and per-module determinism tests enforce this.
-- **Specs are immutable.** Never modify anything under `docs/` or `tests/reference_numbers.yaml`. Propose spec changes in your report instead.
+- **`lib/` is a frozen vendored snapshot, read-only.** Verbatim byte-identical copies from the source project, blob hashes recorded in `lib/PROVENANCE.md`. Never edit files under `lib/`; extract/adapt the math at the consuming site (`fpcmc/`, `eval/`) with citation comments pointing back to the lib file.
+- **Determinism everywhere.** All randomness flows through `fpcmc/rng.py::make_rng(seed, stream="")` (named substream per module), seeded from config. No module-level RNG, no unseeded library calls (UMAP must receive `random_state`). `test_byte_determinism` and per-module determinism tests enforce this.
+- **Specs are immutable.** Never modify anything under `docs/` or `tests/reference_numbers.yaml`. Propose spec changes in your report instead. Sole exception: **appending the completed task's entry to `docs/CHANGES.md`** (owner-directed changelog, 2026-07-10).
 
 ## Per-task workflow
 
@@ -34,7 +35,8 @@ If the PRD and task plan ever conflict, stop and ask; do not resolve specificati
 3. Write the task's tests first where practical (they are specified in the task plan); then implement until green.
 4. Run: `pytest -m "not slow"` on every meaningful change; `pytest` (full, including slow/integration) before declaring the task done.
 5. Commit in small logical units. Final commit message: `TNN: <summary> — all tests green (<N> passed)`.
-6. End the session with a report: what was built, test counts, runtime of integration tests vs NFR-1 budgets, any deviations proposed (never silently applied), and anything the next task should know.
+6. Append the completed task's entry to `docs/CHANGES.md` (what/why/commits/tests/approved deviations — see the T0 entry for the format).
+7. End the session with a report: what was built, test counts, runtime of integration tests vs NFR-1 budgets, any deviations proposed (never silently applied), and anything the next task should know.
 
 ## Stop conditions (halt and report rather than improvise)
 
@@ -46,6 +48,8 @@ If the PRD and task plan ever conflict, stop and ask; do not resolve specificati
 
 ## Environment
 
-- Python + pinned deps in `pyproject.toml`. Do not upgrade pinned versions — `docs/ASSETS.md` §4 records the exact upstream versions to match (`numpy==2.4.3`, `scikit-learn==1.8.0`, `scipy==1.17.1`, `umap-learn==0.5.11`).
+- uv-managed: `uv sync` to set up; run tests as `uv run pytest -m "not slow"` (fast loop) / `uv run pytest` (full). Python pinned to 3.14.3 via `.python-version` — same interpreter as the source venv that produced `tests/reference_numbers.yaml`; don't change it.
+- Pinned deps in `pyproject.toml`. Do not upgrade pinned versions — `docs/ASSETS.md` §4 records the exact upstream versions to match (`numpy==2.4.3`, `scikit-learn==1.8.0`, `scipy==1.17.1`, `umap-learn==0.5.11`).
+- HDBSCAN is `sklearn.cluster.HDBSCAN`; the standalone `hdbscan` PyPI package is deliberately not a dependency (approved T0 deviation) — never add or import it.
 - **Embeddings are never copied or symlinked into this repo.** Copy `roots.env.example` to `roots.env` and set `DATA_ROOT` before running anything that touches real data — `fpcmc/data.py` resolves the four `.pt` files from `roots.env`'s `EMBEDDINGS_DIR` at config-load time. Full contract: `data/README.md`; provenance: `docs/ASSETS.md` §1. There is no local `data/embeddings/` directory to check for presence/absence — integration tests skip with a clear message if `roots.env` is missing/unset or the *resolved* path's files aren't found there (not if a literal `data/embeddings/` folder is missing). A task with [I] tests is not done until they have actually run green against real data.
 - Everything is CPU-only. If a step is slow, optimize (vectorize) rather than reaching for GPU.
