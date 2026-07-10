@@ -145,6 +145,8 @@ Requirements:
 - **FR-1.3** LTM centroids are frozen after creation (matching PCMC's frozen-LTM design and the STAM ablation showing dynamic LTM causes forgetting). STM centroids update by EMA: `c ← normalize((1-α)·c + α·z)`, α default 0.1.
 - **FR-1.4** `concept_id` is persistent for the lifetime of the run. Merges record a lineage map `merged_from: {survivor_id: [absorbed_ids]}` for post-hoc analysis. This is the "persistent cluster identities" requirement.
 
+*(As built at T2, owner-approved 2026-07-10: the dataclass carries per-sub-scorer thresholds — `tau: float` (knn_ref scale; also what FR-3.2 seeding and the single-scorer configs use) plus `tau_vmf: float` (vmf scale) — because FR-4.3's "respective per-concept threshold" cannot be one scalar across the two score scales (knn_ref: cosine distance in [0,2]; vmf: negative log-likelihood, ≈ −2400 and negative at D=1024). See docs/CHANGES.md T2.)*
+
 ### 5.2 FR-2: LTM initialization (task T0)
 
 - **FR-2.1** Initialize one LTM concept per T0 class from the T0 training split (which classes constitute T0 depends on stream protocol, §7.1). Centroid = normalized class mean; reference set = reservoir sample of K_max class embeddings; τ_c and κ_c computed per §5.4–5.5.
@@ -164,6 +166,8 @@ Implement two interchangeable per-concept scorers behind a common interface `sco
 - **FR-4.2 `vmf`:** negative vMF log-likelihood under the concept's vMF(μ=centroid, κ). Estimate κ by the standard Banerjee et al. approximation from the ref_set: with `r̄ = ‖mean of ref embeddings‖`, `κ ≈ r̄(D − r̄²)/(1 − r̄²)`. Require ref_set size ≥ `n_vmf_min` (default 10); below that, fall back to `knn_ref`.
 - **FR-4.3 `knn_vmf` (default):** route/accept if **either** knn_ref or vmf accepts under its respective per-concept threshold; assign to the concept with the best normalized margin `(τ_c − s(z,c)) / τ_c` among accepting concepts. Rationale: the composed paradigm was the strongest no-oracle method in prior experiments; kNN captures local multi-modal structure, vMF captures global directional concentration.
 
+*(As built at T2, owner-approved 2026-07-10: (a) the normalized margin is computed as `(τ_c − s)/|τ_c|` — the literal formula inverts orientation when τ_c < 0, which the vmf thresholds are at D=1024; identical to the formula above for all τ_c > 0. Exact margin ties break to the lexicographically smallest concept_id. (b) The composed scorer's scalar `score(z, c)` is its knn_ref sub-score — FR-4.3 defines accept/assign but no composed scalar; this mirrors the pure-kNN detection statistic of the source paradigm behind the T6 pin — so composed acceptance is not derivable from the scalar alone. See docs/CHANGES.md T2.)*
+
 ### 5.5 FR-5: Per-concept adaptive thresholds
 
 This is the core replacement for the v1 global static threshold. **There is no single global τ in the main path.**
@@ -172,6 +176,8 @@ This is the core replacement for the v1 global static threshold. **There is no s
 - **FR-5.2 (STM / small ref_set):** shrinkage estimate `τ_c = w·τ_c^emp + (1−w)·τ_prior`, with `w = n/(n + n_shrink)` (n = ref_set size, n_shrink default 10), where `τ_c^emp` is the small-sample percentile and `τ_prior` is the global prior below.
 - **FR-5.3 (global prior, bootstrap only):** τ_prior = the q-th percentile of leave-one-out per-concept scores pooled over all T0 classes at initialization. Fixed after T0. Used only as a shrinkage target and for singleton seeding — never as a decision boundary by itself.
 - **FR-5.4** On promotion, the promoted concept's τ is recomputed from its full reference set (FR-5.1 rule). **This is what makes routing promotion-aware:** the promoted class immediately participates in novelty decisions with a calibrated boundary, so subsequent members of that class are absorbed rather than re-buffered — structurally eliminating the v1 purity-drift and re-promotion failure modes.
+
+*(2026-07-10, consequence of the T2 per-sub-scorer thresholds: under `scorer=knn_vmf`, FR-5.1–5.4 apply per sub-scorer — LOO percentiles computed under knn_ref and under vmf separately, yielding τ_c and τ_vmf,c; the FR-5.3 global prior is likewise a per-sub-scorer pair, and FR-3.2 singleton seeding bootstraps both thresholds from their respective priors. See docs/CHANGES.md T2.)*
 
 ### 5.6 FR-6: STM residual clustering (assist mechanism)
 
