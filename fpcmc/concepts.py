@@ -91,6 +91,12 @@ class Concept:
       gt_majority_label: eval-only; never read by pipeline logic.
       merged_from:     absorbed concept_ids, accumulated transitively (FR-1.4
                        lineage; maintained by the T9 merge machinery).
+      refset_changes_since_tau: T4 dirty counter for FR-5.1's lazy threshold
+                       recomputation — counts actual ref_set mutations
+                       (appends and reservoir replacements; post-fill skipped
+                       draws don't count) since the taus were last computed.
+                       Incremented here, read/reset by fpcmc.thresholds; it
+                       governs tau/tau_vmf only, never kappa (T3 decision 1).
 
     Operational (fixed at construction; T5's ConceptStore fills them from
     FPCMCConfig — approved T3 decision 3):
@@ -114,6 +120,7 @@ class Concept:
     provenance: Literal["initial", "seeded", "promoted"] = "seeded"
     gt_majority_label: Optional[str] = None
     merged_from: list[str] = field(default_factory=list)
+    refset_changes_since_tau: int = 0
     window_W: int = 250
     k_max: int = 64
     alpha_ema: float = 0.10
@@ -217,8 +224,11 @@ class Concept:
 
         # Approved decision 1: kappa tracks ref_set exactly (recompute on
         # every mutation; unchanged ref_set => cache already consistent).
+        # The T4 dirty counter records the same mutations for FR-5.1's lazy
+        # tau recomputation (fpcmc.thresholds resets it).
         if changed:
             self.kappa = _estimate_kappa(self.ref_set)
+            self.refset_changes_since_tau += 1
 
 
 def _estimate_kappa(ref_set: np.ndarray) -> float:

@@ -45,6 +45,8 @@ REQUIRED_FILES = [
     # T2 — per-concept scorers + Concept stub
     "fpcmc/scorers.py",
     "fpcmc/concepts.py",
+    # T4 — per-concept adaptive thresholds
+    "fpcmc/thresholds.py",
 ]
 
 
