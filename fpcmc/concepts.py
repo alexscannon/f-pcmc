@@ -1,4 +1,5 @@
-"""Concept data structure and per-concept dynamics (T2 stub completed at T3).
+"""Concept data structure, per-concept dynamics, and the ConceptStore
+routing core (T2 stub; Concept completed at T3; store added at T5).
 
 PRD FR-1: every known class — T0-initial and promoted-novel alike — is a
 `Concept`. This module carries the dataclass plus the two per-concept
@@ -8,6 +9,35 @@ dynamics entry points:
     centroid dynamics (EMA for STM, bit-frozen for LTM), and the match /
     window / LRU bookkeeping the T7+ memory machinery reads.
   - ``Concept.seed(...)`` — FR-3.2 singleton constructor for novel embeddings.
+
+T5 adds ``ConceptStore`` (LTM + STM registries, store-owned concept-id
+allocation, the exact FR-9 three-tier decision cascade in ``route``) and
+``RoutingResult``. Approved T5 decisions (owner Q&A, 2026-07-11;
+docs/CHANGES.md T5):
+
+  5. RoutingResult.score is the winning concept's ScoreDetail.score (under
+     knn_vmf: the composed scalar = knn_ref sub-score, per the T2 decision),
+     plus `via`/`fallback` metadata for the event log and the A5 ablation;
+     tier 3 carries score = margin = NaN and via = None (nothing accepted).
+  6. The FR-5.1 lazy threshold check (fpcmc.thresholds.maybe_recompute) runs
+     after every assignment's add_observation, on the matched concept only,
+     tiers 1 and 2 alike; tier-3 seeds skip it (fresh dirty counter).
+  7. Every seeded singleton bootstraps tau = prior.tau AND
+     tau_vmf = prior.tau_vmf — the GlobalPrior is always a full pair, so NaN
+     never enters a routed concept regardless of scorer config.
+  8. Concept ids are PRD-literal zero-padded ("ltm_{:03d}" / "stm_{:04d}"),
+     store-owned monotone counters, never reused; the allocator raises on
+     overflow rather than widening, preserving lexicographic == numeric
+     ordering (the FR-4.3 margin tie-break makes id order behavior-relevant;
+     "ltm_" < "stm_" resolves exact cross-status ties LTM-first).
+  9. The batch scoring path computes per-concept ``ref_set @ z`` — the exact
+     frozen-scorer op — and vectorizes composition/selection over concept
+     arrays. TASKS T5's literal "single matrix op per tier" was measured
+     bitwise-incompatible with the frozen per-concept scorer math (a stacked
+     GEMV's summation order depends on row position; ~half of row dots differ
+     by 1 ulp at every D incl. 1024), and the test_vectorized_matches_loop
+     identity guard is the binding clause. NFR-1 is met: the per-concept
+     matvec is still the FLOP-dominant op with no per-row Python work.
 
 Approved deviation (owner, 2026-07-10, T2): FR-1 declares a single
 `tau: float`, but FR-4.3's composed scorer accepts "under its respective
@@ -57,10 +87,19 @@ aliasing arrays they passed in.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import numpy as np
+
+from fpcmc.config import FPCMCConfig
+from fpcmc.rng import make_rng
+
+if TYPE_CHECKING:  # real imports are deferred: scorers/thresholds import us
+    from fpcmc.scorers import ScoreDetail
+    from fpcmc.thresholds import GlobalPrior
 
 _EPS = 1e-12
 
@@ -236,3 +275,334 @@ def _estimate_kappa(ref_set: np.ndarray) -> float:
     from fpcmc.scorers import estimate_kappa
 
     return estimate_kappa(ref_set)
+
+
+# ============================================================== routing (T5)
+
+
+@dataclass(frozen=True)
+class RoutingResult:
+    """FR-9 outcome of routing one stream embedding (TASKS T5).
+
+    prediction: the winning concept_id at tier 1; "unknown" at tiers 2 and 3
+                (FR-9.1 — "unknown" is a legitimate prediction).
+    concept_id: the assigned concept (tiers 1-2) or the freshly seeded
+                singleton (tier 3).
+    tier:       1 = LTM ∪ mature-STM acceptance, 2 = immature-STM acceptance,
+                3 = seeded new candidate (FR-3.3 routing order).
+    score:      the winning concept's scorer scalar (under knn_vmf the
+                composed scalar = knn_ref sub-score, T2 owner decision, so
+                acceptance is not derivable from it); NaN at tier 3 (T5 owner
+                decision — nothing accepted, the seed never scored itself).
+    margin:     the winning normalized margin (tau - s)/|tau|; NaN at tier 3.
+    via:        sub-scorer that produced the margin ("knn_ref" / "vmf"; None
+                at tier 3) — event-log and A5-ablation metadata.
+    fallback:   FR-4.2 fallback flag of the winning ScoreDetail.
+    """
+
+    prediction: str
+    concept_id: str
+    tier: int
+    score: float
+    margin: float
+    via: Optional[str]
+    fallback: bool
+
+
+_ID_WIDTH = {"ltm": 3, "stm": 4}  # PRD FR-1 literals: "ltm_037" / "stm_0142"
+_ID_PATTERN = re.compile(r"^(ltm|stm)_(\d+)$")
+
+
+class ConceptStore:
+    """LTM + STM registries and the FR-9 routing core (TASKS T5).
+
+    The store owns concept-id allocation (approved T3 decision 3 / T5
+    decision 8) and holds the frozen FR-5.3 ``GlobalPrior`` pair, supplied at
+    construction (T6's ``initialize_ltm`` produces it in production). It
+    consumes the frozen T2 scorer interface; acceptance decisions read only
+    per-concept thresholds — the prior is reachable solely from ``_seed``
+    (FR-3.2 bootstrap) and ``_assign`` (FR-5.2 shrinkage target forwarded to
+    ``fpcmc.thresholds.maybe_recompute``), which cross-cutting invariant 5
+    asserts structurally.
+
+    ``ltm``/``stm``/tier membership are live views computed from
+    ``concept.status`` and ``match_count`` at route time — status is the
+    single source of truth, so a T8 promotion (or a manual flip in tests)
+    participates in tier-1 routing on the very next call (FR-5.4).
+
+    ``vectorized`` selects the batch scoring path (default; T5 decision 9);
+    ``vectorized=False`` routes through the frozen ``Scorer.select`` loop —
+    the reference implementation ``test_vectorized_matches_loop`` guards the
+    batch path against.
+    """
+
+    def __init__(
+        self,
+        config: FPCMCConfig,
+        prior: "GlobalPrior",
+        concepts: Iterable[Concept] = (),
+        *,
+        vectorized: bool = True,
+    ) -> None:
+        # Deferred imports: both modules import Concept from us.
+        from fpcmc.scorers import make_scorer
+        from fpcmc.thresholds import maybe_recompute
+
+        self._config = config
+        self._prior = prior
+        self._scorer = make_scorer(config)
+        self._maybe_recompute = maybe_recompute
+        self._vectorized = bool(vectorized)
+        self._registry: dict[str, Concept] = {}
+        self._ids_ever: set[str] = set()
+        self._next_id = {"ltm": 0, "stm": 0}
+        for concept in concepts:
+            self.register(concept)
+
+    # ------------------------------------------------------------- registry
+
+    @property
+    def concepts(self) -> list[Concept]:
+        """All concepts, registration order."""
+        return list(self._registry.values())
+
+    @property
+    def ltm(self) -> list[Concept]:
+        """Live LTM view (status is the source of truth; see class docstring)."""
+        return [c for c in self._registry.values() if c.status == "LTM"]
+
+    @property
+    def stm(self) -> list[Concept]:
+        """Live STM view (status is the source of truth; see class docstring)."""
+        return [c for c in self._registry.values() if c.status == "STM"]
+
+    def get(self, concept_id: str) -> Concept:
+        return self._registry[concept_id]
+
+    def __len__(self) -> int:
+        return len(self._registry)
+
+    def __contains__(self, concept_id: str) -> bool:
+        return concept_id in self._registry
+
+    def register(self, concept: Concept) -> None:
+        """Add a concept, enforcing run-wide id uniqueness (invariant 4).
+
+        Ids are never reused, even across future removals (T7 eviction, T9
+        merges): rejection checks every id ever registered, and the
+        allocation counters advance past any externally allocated id.
+        """
+        cid = concept.concept_id
+        if cid in self._ids_ever:
+            raise ValueError(
+                f"concept_id {cid!r} was already used in this run — ids are "
+                "never reused (FR-1.4 / invariant 4)"
+            )
+        m = _ID_PATTERN.match(cid)
+        if m:
+            kind, num = m.group(1), int(m.group(2))
+            self._next_id[kind] = max(self._next_id[kind], num + 1)
+        self._ids_ever.add(cid)
+        self._registry[cid] = concept
+
+    def new_concept_id(self, kind: str) -> str:
+        """Allocate the next zero-padded id (T5 decision 8; never reused).
+
+        Overflow raises instead of widening: the FR-4.3 lexicographic
+        tie-break relies on lexicographic == numeric id ordering.
+        """
+        width = _ID_WIDTH.get(kind)
+        if width is None:
+            raise ValueError(f"unknown concept kind {kind!r}; expected 'ltm' or 'stm'")
+        n = self._next_id[kind]
+        if n >= 10**width:
+            raise ValueError(
+                f"{kind} id space exhausted at {10 ** width} ids — widening would "
+                "break the lexicographic ordering the margin tie-break relies on"
+            )
+        self._next_id[kind] = n + 1
+        return f"{kind}_{n:0{width}d}"
+
+    # -------------------------------------------------------------- routing
+
+    def route(self, z: np.ndarray, step: int) -> RoutingResult:
+        """Exactly the FR-9 decision cascade (FR-3.3 routing order).
+
+        Tier 1: LTM ∪ mature-STM acceptance → best-margin assignment.
+        Tier 2: else immature-STM acceptance → assignment, prediction
+                "unknown" (immature candidates cannot claim traffic from
+                tier 1, however good their margin).
+        Tier 3: else seed a new STM singleton (FR-3.2), prediction "unknown".
+        """
+        z = np.asarray(z, dtype=np.float64)
+        n_mature = self._config.n_mature
+        concepts = list(self._registry.values())
+
+        tier1 = [c for c in concepts if c.status == "LTM" or c.match_count >= n_mature]
+        hit = self._select(z, tier1)
+        if hit is not None:
+            concept, detail = hit
+            self._assign(concept, z, step)
+            return RoutingResult(
+                prediction=concept.concept_id,
+                concept_id=concept.concept_id,
+                tier=1,
+                score=detail.score,
+                margin=detail.margin,
+                via=detail.via,
+                fallback=detail.fallback,
+            )
+
+        tier2 = [c for c in concepts if c.status == "STM" and c.match_count < n_mature]
+        hit = self._select(z, tier2)
+        if hit is not None:
+            concept, detail = hit
+            self._assign(concept, z, step)
+            return RoutingResult(
+                prediction="unknown",
+                concept_id=concept.concept_id,
+                tier=2,
+                score=detail.score,
+                margin=detail.margin,
+                via=detail.via,
+                fallback=detail.fallback,
+            )
+
+        concept = self._seed(z, step)
+        return RoutingResult(
+            prediction="unknown",
+            concept_id=concept.concept_id,
+            tier=3,
+            score=float("nan"),
+            margin=float("nan"),
+            via=None,
+            fallback=False,
+        )
+
+    def _assign(self, concept: Concept, z: np.ndarray, step: int) -> None:
+        """Absorb an assigned embedding, then the FR-5.1 lazy threshold check.
+
+        T5 decision 6: the check runs after every assignment's
+        add_observation, on the matched concept only, tiers 1 and 2 alike —
+        ref_set mutations happen nowhere else at T5, so the ratio trigger
+        needs no other call site.
+        """
+        concept.add_observation(z, step)
+        self._maybe_recompute(concept, self._config, self._prior)
+
+    def _seed(self, z: np.ndarray, step: int) -> Concept:
+        """FR-3.2: seed and register a new STM singleton for a novel embedding.
+
+        Both thresholds bootstrap from the frozen global prior pair (T5
+        decision 7); the reservoir Generator is the per-concept named
+        substream (approved T3 decision 3).
+        """
+        concept_id = self.new_concept_id("stm")
+        concept = Concept.seed(
+            z,
+            step,
+            self._prior.tau,
+            self._prior.tau_vmf,
+            concept_id=concept_id,
+            rng=make_rng(self._config.seed, f"reservoir/{concept_id}"),
+            window_W=self._config.window_W,
+            k_max=self._config.K_max_refset,
+            alpha_ema=self._config.alpha_stm_ema,
+        )
+        self.register(concept)
+        return concept
+
+    # ------------------------------------------------------------ selection
+
+    def _select(self, z: np.ndarray, concepts: list[Concept]) -> tuple[Concept, "ScoreDetail"] | None:
+        """FR-4.3 best-margin assignment within one tier, or None."""
+        if not concepts:
+            return None
+        if not self._vectorized:
+            selection = self._scorer.select(z, concepts)
+            return None if selection is None else (selection.concept, selection.detail)
+        return self._select_batch(z, concepts)
+
+    def _select_batch(self, z: np.ndarray, concepts: list[Concept]) -> tuple[Concept, "ScoreDetail"] | None:
+        """Batch scoring across concepts, bitwise-faithful to Scorer.select.
+
+        T5 decision 9: per-concept scores use the exact frozen-scorer
+        expressions (``1.0 - ref_set @ z`` per concept — a stacked GEMV is
+        NOT bitwise-equal to it); the composition (FR-4.2 fallback, FR-4.3
+        OR-accept / best sub-margin) and the selection (max margin, exact
+        ties to the lexicographically smallest concept_id) run over arrays.
+        Guarded by test_vectorized_matches_loop against the loop path.
+        """
+        from fpcmc.scorers import ScoreDetail, _margin, log_C_D  # deferred; scorers imports us
+
+        config = self._config
+        kind = config.scorer
+        n = len(concepts)
+
+        # knn_ref side — mirrors KnnRefScorer.score_detail per concept.
+        s_knn = np.empty(n)
+        m_knn = np.empty(n)
+        acc_knn = np.zeros(n, dtype=bool)
+        for i, c in enumerate(concepts):
+            dists = 1.0 - c.ref_set @ z
+            k = min(config.k_ref, dists.shape[0])
+            s = float(np.mean(np.partition(dists, k - 1)[:k]))
+            s_knn[i] = s
+            acc_knn[i] = s <= c.tau
+            m_knn[i] = _margin(c.tau, s)
+
+        if kind == "knn_ref":
+            score, accepted, margin = s_knn, acc_knn, m_knn
+            via = ["knn_ref"] * n
+            fallback = np.zeros(n, dtype=bool)
+        else:
+            # vmf side — mirrors VmfScorer.score_detail per concept: native
+            # above n_vmf_min, wholesale knn_ref delegation below (FR-4.2).
+            s_vmf = np.empty(n)
+            m_vmf = np.empty(n)
+            acc_vmf = np.zeros(n, dtype=bool)
+            fallback = np.zeros(n, dtype=bool)
+            for i, c in enumerate(concepts):
+                if c.ref_set.shape[0] < config.n_vmf_min:
+                    fallback[i] = True
+                    s_vmf[i], acc_vmf[i], m_vmf[i] = s_knn[i], acc_knn[i], m_knn[i]
+                    continue
+                kappa = c.kappa
+                if not np.isfinite(kappa):
+                    raise ValueError(
+                        f"concept {c.concept_id!r}: kappa={kappa} is not finite but "
+                        f"ref_set has {c.ref_set.shape[0]} >= n_vmf_min="
+                        f"{config.n_vmf_min} members — the owner must maintain the "
+                        "cached Banerjee estimate (FR-4.2)"
+                    )
+                d = c.centroid.shape[0]
+                s = -(log_C_D(kappa, d) + kappa * float(c.centroid @ z))
+                s_vmf[i] = s
+                acc_vmf[i] = s <= c.tau_vmf
+                m_vmf[i] = _margin(c.tau_vmf, s)
+
+            if kind == "vmf":
+                score, accepted, margin = s_vmf, acc_vmf, m_vmf
+                via = ["knn_ref" if fb else "vmf" for fb in fallback]
+            else:  # knn_vmf — mirrors KnnVmfScorer.score_detail composition.
+                accepted = acc_knn | acc_vmf
+                vmf_wins = m_vmf > m_knn  # exact ties prefer the knn detail
+                margin = np.where(vmf_wins, m_vmf, m_knn)
+                score = s_knn  # composed scalar = knn_ref sub-score (T2 decision)
+                via = ["vmf" if w else "knn_ref" for w in vmf_wins]
+
+        candidates = np.flatnonzero(accepted)
+        if candidates.size == 0:
+            return None
+        best_margin = margin[candidates].max()
+        tied = candidates[margin[candidates] == best_margin]
+        w = int(min(tied, key=lambda i: concepts[i].concept_id))
+        detail = ScoreDetail(
+            score=float(score[w]),
+            accepted=True,
+            margin=float(margin[w]),
+            scorer=self._scorer.name,
+            via=via[w],
+            fallback=bool(fallback[w]),
+        )
+        return concepts[w], detail
