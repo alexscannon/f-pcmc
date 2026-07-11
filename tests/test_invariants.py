@@ -9,6 +9,14 @@ Added at T3:
   - invariant 4 (immutability half): concept_id can never be reassigned or
     deleted. The uniqueness-across-a-run half needs a ConceptStore and lands
     with T5.
+Added at T5:
+  - invariant 4 (uniqueness half): concept ids are unique across an entire
+    run and never reused — the store rejects duplicate registration and its
+    allocator never re-issues an id.
+  - invariant 5: no global threshold in the decision cascade — the routing
+    path's acceptance decisions read only per-concept tau/tau_vmf; the global
+    prior is reachable solely from the seeding and threshold-recompute
+    (shrinkage) code paths.
 """
 
 import ast
@@ -109,3 +117,136 @@ def test_concept_id_immutability_invariant():
     with pytest.raises(AttributeError):
         del concept.concept_id
     assert concept.concept_id == "ltm_000"
+
+
+# Invariant 4 (T5+), uniqueness half: concept ids are unique across the entire
+# run — the store refuses duplicate registration, and its allocator never
+# re-issues an id (including ids that were registered externally).
+
+
+def test_concept_id_uniqueness_invariant():
+    from fpcmc.concepts import Concept, ConceptStore
+    from fpcmc.config import FPCMCConfig
+    from fpcmc.rng import make_rng
+    from fpcmc.scorers import estimate_kappa
+    from fpcmc.thresholds import compute_global_prior, recompute_thresholds
+    from tests.fixtures.vmf_world import VMFWorld
+
+    config = FPCMCConfig()
+    world = VMFWorld(seed=29, k_known=2, k_novel=2)
+    pool = world.t0_pool(n_per_class=20)
+
+    def _ltm(i: int, name: str) -> Concept:
+        ref = np.array(pool.x[pool.labels == name])
+        centroid = ref.mean(axis=0)
+        centroid /= np.linalg.norm(centroid)
+        return Concept(
+            concept_id=f"ltm_{i:03d}",
+            centroid=centroid,
+            ref_set=ref,
+            tau=0.5,
+            kappa=estimate_kappa(ref),
+            status="LTM",
+            provenance="initial",
+            rng=make_rng(29, f"invariants/reservoir/ltm_{i:03d}"),
+        )
+
+    concepts = [_ltm(i, name) for i, name in enumerate(world.known_names)]
+    prior = compute_global_prior(concepts, config)
+    for c in concepts:
+        recompute_thresholds(c, config, prior)
+    store = ConceptStore(config, prior, concepts)
+
+    # An externally registered id must never be re-issued by the allocator.
+    ext = np.array([world.distractor_point(90)])
+    store.register(
+        Concept(
+            concept_id="stm_0002",
+            centroid=ext[0],
+            ref_set=ext,
+            tau=prior.tau,
+            kappa=estimate_kappa(ext),
+            status="STM",
+            provenance="seeded",
+        )
+    )
+
+    # Duplicate registration is rejected outright.
+    with pytest.raises(ValueError, match="stm_0002"):
+        store.register(
+            Concept(
+                concept_id="stm_0002",
+                centroid=ext[0],
+                ref_set=ext.copy(),
+                tau=prior.tau,
+                kappa=estimate_kappa(ext),
+            )
+        )
+
+    # A stream with heavy novelty (seeds on every distractor and early novel
+    # sample) never produces a duplicate id.
+    queries = np.vstack(
+        [world.sample_class(n, 25, stream="invariants/uniq") for n in world.known_names]
+        + [world.sample_class(n, 20, stream="invariants/uniq") for n in world.novel_names]
+        + [world.distractor_point(i)[None, :] for i in range(30)]
+    )
+    perm = make_rng(29, "invariants/uniq/perm").permutation(len(queries))
+    for step, z in enumerate(queries[perm]):
+        store.route(z, step)
+
+    ids = [c.concept_id for c in store.concepts]
+    assert len(ids) == len(set(ids)), "duplicate concept_id in a single run"
+    assert len(store.stm) > 1, "the stream must actually have seeded candidates"
+
+
+# Invariant 5 (T5+): no global threshold in the decision cascade. The FR-9
+# acceptance decisions read only per-concept thresholds (concept.tau /
+# concept.tau_vmf via the frozen scorers); the global prior may be touched
+# only by seeding (FR-3.2 bootstrap) and threshold recomputation (FR-5.2
+# shrinkage target), never by selection. Enforced structurally: within
+# ConceptStore, only __init__ (storing it), _assign (forwarding it to
+# fpcmc.thresholds.maybe_recompute) and _seed may reference the prior, and
+# the scorer module must not know priors exist at all.
+
+_PRIOR_ALLOWED_STORE_METHODS = {"__init__", "_assign", "_seed"}
+
+
+def _prior_references(tree: ast.AST) -> list[ast.AST]:
+    hits = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and "prior" in node.id.lower():
+            hits.append(node)
+        elif isinstance(node, ast.Attribute) and "prior" in node.attr.lower():
+            hits.append(node)
+    return hits
+
+
+def test_no_global_threshold_in_decision_cascade():
+    concepts_tree = _parse(REPO_ROOT / "fpcmc" / "concepts.py")
+
+    store_cls = next(
+        node
+        for node in ast.walk(concepts_tree)
+        if isinstance(node, ast.ClassDef) and node.name == "ConceptStore"
+    )
+    offenders = []
+    for method in store_cls.body:
+        if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if method.name in _PRIOR_ALLOWED_STORE_METHODS:
+            continue
+        for hit in _prior_references(method):
+            offenders.append(f"ConceptStore.{method.name}:{hit.lineno}")
+    assert not offenders, (
+        "the decision cascade must not reach the global prior (invariant 5); "
+        "prior references allowed only in "
+        f"{sorted(_PRIOR_ALLOWED_STORE_METHODS)}, found:\n" + "\n".join(offenders)
+    )
+
+    # The scorers (where accept/margin decisions actually happen) must be
+    # entirely prior-free: acceptance reads concept.tau / concept.tau_vmf only.
+    scorer_hits = _prior_references(_parse(REPO_ROOT / "fpcmc" / "scorers.py"))
+    assert not scorer_hits, (
+        "fpcmc/scorers.py must not reference any prior/global threshold, found at lines: "
+        + ", ".join(str(h.lineno) for h in scorer_hits)
+    )
