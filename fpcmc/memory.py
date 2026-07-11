@@ -1,8 +1,10 @@
-"""STM -> LTM promotion (T8; PRD FR-7.1-7.2, FR-5.4).
+"""STM/LTM memory management: promotion (T8; PRD FR-7.1-7.2, FR-5.4) and
+duplicate-cluster merging (T9; PRD FR-8.1-8.3).
 
 ``PromotionEvaluator`` evaluates the four FR-7 criteria against mature STM
-candidates and applies atomic promotion. T9 adds the MergeSweeper (FR-8) to
-this module.
+candidates and applies atomic promotion. ``MergeSweeper`` runs the periodic
+FR-8 sweep (STM<->STM, STM->LTM folds, LTM<->LTM promoted pairs) plus the
+on-promotion check; see its class docstring and owner decisions 16-20 below.
 
 The four criteria (all must hold; evaluated in PRD order, never
 short-circuited, so a decision always names every failing criterion):
@@ -49,6 +51,56 @@ docs/CHANGES.md T8 — numbering continues from the T7 notes in concepts.py):
       runtime — invariant 2, the pipeline never sees labels) and purity is
       None, both filled post hoc by the T13 harness.
 
+Owner-approved T9 decisions (Q&A 2026-07-11, pre-implementation; recorded in
+docs/CHANGES.md T9):
+
+  16. FR-8.1 condition-2 math — k = min(k_ref, available) throughout,
+      matching every other kNN in the system. Within = the POOLED mean of
+      both ref_sets' leave-one-out knn scores (the frozen
+      ``fpcmc.thresholds.loo_knn_scores`` discipline: self masked to +inf);
+      cross = the pooled mean over both directions (each member of A scored
+      against B's full set, and vice versa). Merge iff
+      cross_mean / within_mean <= MERGE_CROSS_WITHIN_MAX (1.1, the FR-8.1
+      literal — deliberately not a §8 config key) AND centroid cosine
+      similarity >= merge_sim.
+  17. Sweep mechanics — PRD order per sweep: STM<->STM (FR-8.1), then
+      STM->LTM folds (FR-8.2), then LTM<->LTM promoted pairs (FR-8.3); each
+      phase iterates ascending-id pairs to a deterministic fixpoint with
+      merges effective immediately (so A<-B then A<-C lands in one sweep and
+      a survivor is instantly eligible for further merges).
+      ``on_promotion`` runs just the LTM<->LTM phase (idempotent).
+  18. Survivor bookkeeping — FR-8.1 merges (STM<->STM, LTM<->LTM) union the
+      history: match_count sum, match_windows union, last_matched_at max,
+      ref_count_seen sum; the survivor keeps its concept_id, created_at,
+      status and provenance. An STM survivor's centroid is recomputed as the
+      normalized mean of the FULL ref_set union (before any subsampling); an
+      LTM survivor's centroid stays bit-frozen (FR-1.3). FR-8.2 folds move
+      ref_set + ref_count_seen ONLY — a fold is not a match event, so the
+      LTM concept's match statistics stay honest.
+  19. Bounded union — a union larger than K_max is uniformly subsampled
+      without replacement via the dedicated substream
+      ``make_rng(config.seed, f"merge/{step}/{survivor}<-{absorbed}")``; the
+      survivor's own reservoir Generator is never touched, keeping the
+      FR-1.1 draw discipline (pinned by test_reservoir_uniformity's exact
+      replay) pure.
+  20. Singleton pairs — pairs with K < 2 on either side are NOT
+      sweep-mergeable: the within-structure FR-8.1's ratio guards with is
+      unobservable (PRD §11 names that ratio the near-OOD-collapse guard, so
+      err conservative). Singleton consolidation is T10's job: its HDBSCAN
+      grouping calls ``merge_pair`` directly, the clustering standing in for
+      the two-condition evidence.
+
+Merge sites replace ref_sets wholesale (outside ``add_observation``), so per
+the T4 rule they recompute kappa themselves (``fpcmc.scorers.estimate_kappa``)
+before recomputing taus via the status-sensitive
+``fpcmc.thresholds.recompute_thresholds`` (LTM -> pure FR-5.1, STM -> FR-5.2
+shrinkage; resets the dirty counter) — which is why ``MergeSweeper`` holds
+the frozen ``GlobalPrior`` (the store cannot expose its own without violating
+invariant 5's AST guard). Lineage: the survivor's ``merged_from`` gains the
+absorbed id plus the absorbed concept's own ``merged_from`` (chained
+absorption stays resolvable); ``MergeSweeper.lineage`` is the FR-1.4
+store-level {survivor: [absorbed...]} view over this sweeper's merge_log.
+
 The reported separation margin is the binding (minimum) normalized rejection
 margin ``(s - tau') / |tau'|`` with ``tau' = sep_factor * tau``, taken over
 all LTM concepts and their applicable sub-scorers — positive iff criterion 3
@@ -74,7 +126,16 @@ import numpy as np
 
 from fpcmc.concepts import Concept, ConceptStore
 from fpcmc.config import FPCMCConfig
-from fpcmc.thresholds import recompute_on_promotion
+from fpcmc.rng import make_rng
+from fpcmc.scorers import estimate_kappa, make_scorer
+from fpcmc.thresholds import (
+    GlobalPrior,
+    loo_knn_scores,
+    recompute_on_promotion,
+    recompute_thresholds,
+)
+
+_EPS = 1e-12
 
 #: FR-7 criteria in PRD (and evaluation) order; ``PromotionDecision.failed``
 #: is always an in-order subsequence of this tuple.
@@ -252,3 +313,275 @@ class PromotionEvaluator:
                 purity=None,
             )
         )
+
+
+# ================================================================ merging (T9)
+
+#: FR-8.1 literal: cross-ref mean kNN distance <= 1.1x the within mean.
+#: Deliberately not a PRD §8 config key (decision 16).
+MERGE_CROSS_WITHIN_MAX = 1.1
+
+
+@dataclass(frozen=True)
+class MergeCheck:
+    """FR-8.1 two-condition evidence for one candidate pair (decision 16).
+
+    compatible = centroid_sim >= merge_sim AND cross_within_ratio <= 1.1.
+    """
+
+    centroid_sim: float
+    cross_within_ratio: float
+    compatible: bool
+
+
+@dataclass(frozen=True)
+class MergeRecord:
+    """One merge/fold, as the event log will see it (mirrors EvictionRecord).
+
+    kind: "stm_stm" (FR-8.1) | "stm_ltm" (FR-8.2 fold) | "ltm_ltm" (FR-8.3).
+    cross_within_ratio is NaN for folds — FR-8.2 triggers on threshold
+    acceptance, not on the two-condition rule. match counts are recorded
+    post-merge for the survivor, at-absorption for the absorbed concept.
+    """
+
+    step: int
+    kind: str
+    survivor_id: str
+    absorbed_id: str
+    centroid_sim: float
+    cross_within_ratio: float
+    survivor_match_count: int
+    absorbed_match_count: int
+
+
+def _cross_knn_scores(queries: np.ndarray, ref_set: np.ndarray, k_ref: int) -> np.ndarray:
+    """(N,) mean cosine distance of each query row to its min(k_ref, K)
+    nearest ref_set members — the FR-4.1 expression, batched over rows."""
+    dists = 1.0 - queries @ ref_set.T
+    k = min(int(k_ref), ref_set.shape[0])
+    return np.partition(dists, k - 1, axis=1)[:, :k].mean(axis=1)
+
+
+class MergeSweeper:
+    """FR-8 duplicate-cluster merging over a ConceptStore (decisions 16-20).
+
+    ``sweep(store, step)`` runs the periodic pass in PRD order — STM<->STM,
+    STM->LTM folds, LTM<->LTM promoted pairs — each phase to a deterministic
+    fixpoint. ``on_promotion(store, step)`` is the FR-8 on-promotion check
+    (LTM<->LTM phase only); T11's runner calls it after each promotion.
+    ``merge_pair`` applies the FR-8.1 mechanics unconditionally and is the
+    public seam T10's identity-preserving consolidation calls directly.
+
+    Holds the frozen GlobalPrior because post-merge taus go through the
+    status-sensitive ``recompute_thresholds`` (STM survivors shrink toward
+    the prior); acceptance decisions still read only per-concept thresholds.
+    """
+
+    def __init__(self, config: FPCMCConfig, prior: GlobalPrior) -> None:
+        self._config = config
+        self._prior = prior
+        self._scorer = make_scorer(config)
+        self.merge_log: list[MergeRecord] = []
+
+    @property
+    def lineage(self) -> dict[str, list[str]]:
+        """FR-1.4 store-level lineage map {survivor: [absorbed, ...]} over
+        this sweeper's merges, in merge order."""
+        out: dict[str, list[str]] = {}
+        for rec in self.merge_log:
+            out.setdefault(rec.survivor_id, []).append(rec.absorbed_id)
+        return out
+
+    # ------------------------------------------------------------ entry points
+
+    def sweep(self, store: ConceptStore, step: int) -> None:
+        """The periodic FR-8 sweep (every T_merge steps; wired by T11)."""
+        self._sweep_stm_stm(store, step)
+        self._sweep_stm_ltm(store, step)
+        self._sweep_ltm_ltm(store, step)
+
+    def on_promotion(self, store: ConceptStore, step: int) -> None:
+        """FR-8.3 on-promotion check: newly promoted vs previously promoted.
+
+        Runs the (idempotent) LTM<->LTM phase — restricting it to pairs
+        involving the newcomer would be equivalent, since earlier pairs
+        already reached fixpoint at the last sweep/promotion."""
+        self._sweep_ltm_ltm(store, step)
+
+    # ------------------------------------------------------ two-condition rule
+
+    def check_pair(self, a: Concept, b: Concept) -> MergeCheck:
+        """FR-8.1 evidence for one pair (decision 16). Pairs with K < 2 on
+        either side are never sweep-compatible (decision 20): the within
+        structure the ratio guards with is unobservable, and the ratio is
+        reported NaN."""
+        config = self._config
+        sim = float(a.centroid @ b.centroid)
+        if a.ref_set.shape[0] < 2 or b.ref_set.shape[0] < 2:
+            return MergeCheck(centroid_sim=sim, cross_within_ratio=float("nan"), compatible=False)
+        within = np.concatenate([
+            loo_knn_scores(a.ref_set, config.k_ref),
+            loo_knn_scores(b.ref_set, config.k_ref),
+        ])
+        cross = np.concatenate([
+            _cross_knn_scores(a.ref_set, b.ref_set, config.k_ref),
+            _cross_knn_scores(b.ref_set, a.ref_set, config.k_ref),
+        ])
+        ratio = float(cross.mean() / max(float(within.mean()), _EPS))
+        return MergeCheck(
+            centroid_sim=sim,
+            cross_within_ratio=ratio,
+            compatible=sim >= config.merge_sim and ratio <= MERGE_CROSS_WITHIN_MAX,
+        )
+
+    # ------------------------------------------------------------------ phases
+
+    def _sweep_stm_stm(self, store: ConceptStore, step: int) -> None:
+        """FR-8.1 phase: ascending-id STM pairs to fixpoint (decision 17)."""
+        merged = True
+        while merged:
+            merged = False
+            stm = sorted(store.stm, key=lambda c: c.concept_id)
+            for i in range(len(stm)):
+                for j in range(i + 1, len(stm)):
+                    check = self.check_pair(stm[i], stm[j])
+                    if check.compatible:
+                        self.merge_pair(store, stm[i], stm[j], step, kind="stm_stm", check=check)
+                        merged = True
+                        break
+                if merged:
+                    break
+
+    def _sweep_stm_ltm(self, store: ConceptStore, step: int) -> None:
+        """FR-8.2 phase: fold every STM candidate whose centroid is ACCEPTED
+        by an LTM concept (the exact complement of T8's separation criterion
+        at sep_factor=1) into the best-margin accepting LTM concept — the
+        frozen ``Scorer.select`` semantics, lexicographic tie-break included.
+        """
+        folded = True
+        while folded:
+            folded = False
+            for cand in sorted(store.stm, key=lambda c: c.concept_id):
+                selection = self._scorer.select(cand.centroid, store.ltm)
+                if selection is None:
+                    continue
+                self._fold(store, selection.concept, cand, step)
+                folded = True
+                break
+
+    def _sweep_ltm_ltm(self, store: ConceptStore, step: int) -> None:
+        """FR-8.3 phase: FR-8.1 rule over provenance="promoted" pairs only —
+        two "initial" concepts never merge, nor does a promoted/initial pair.
+        """
+        merged = True
+        while merged:
+            merged = False
+            promoted = sorted(
+                (c for c in store.ltm if c.provenance == "promoted"),
+                key=lambda c: c.concept_id,
+            )
+            for i in range(len(promoted)):
+                for j in range(i + 1, len(promoted)):
+                    check = self.check_pair(promoted[i], promoted[j])
+                    if check.compatible:
+                        self.merge_pair(
+                            store, promoted[i], promoted[j], step, kind="ltm_ltm", check=check
+                        )
+                        merged = True
+                        break
+                if merged:
+                    break
+
+    # --------------------------------------------------------------- mechanics
+
+    def merge_pair(
+        self,
+        store: ConceptStore,
+        a: Concept,
+        b: Concept,
+        step: int,
+        *,
+        kind: str = "stm_stm",
+        check: Optional[MergeCheck] = None,
+    ) -> Concept:
+        """Apply the FR-8.1 merge mechanics unconditionally; returns the
+        survivor. Public seam for T10 (decision 20): HDBSCAN-grouped immature
+        candidates are merged through here, the clustering standing in for
+        the two-condition check (pass check=None).
+
+        Survivor = larger match_count, ties to the smaller concept_id.
+        Bookkeeping per decision 18; bounded union per decision 19; kappa
+        recomputed at the merge site before the status-sensitive tau
+        recompute (T4 rule).
+        """
+        if b.match_count > a.match_count or (
+            b.match_count == a.match_count and b.concept_id < a.concept_id
+        ):
+            survivor, absorbed = b, a
+        else:
+            survivor, absorbed = a, b
+
+        sim = float(survivor.centroid @ absorbed.centroid) if check is None else check.centroid_sim
+        union = np.vstack([survivor.ref_set, absorbed.ref_set])
+        if survivor.status == "STM":
+            c = union.mean(axis=0)  # full union, pre-subsample (decision 18)
+            survivor.centroid = c / max(float(np.linalg.norm(c)), _EPS)
+        survivor.ref_set = self._bounded_union(union, step, survivor.concept_id, absorbed.concept_id)
+        survivor.ref_count_seen += absorbed.ref_count_seen
+        survivor.match_count += absorbed.match_count
+        survivor.match_windows |= absorbed.match_windows
+        survivor.last_matched_at = max(survivor.last_matched_at, absorbed.last_matched_at)
+        survivor.kappa = estimate_kappa(survivor.ref_set)
+        recompute_thresholds(survivor, self._config, self._prior)
+        survivor.merged_from.extend([absorbed.concept_id, *absorbed.merged_from])
+        store.remove(absorbed.concept_id)
+        self.merge_log.append(
+            MergeRecord(
+                step=int(step),
+                kind=kind,
+                survivor_id=survivor.concept_id,
+                absorbed_id=absorbed.concept_id,
+                centroid_sim=sim,
+                cross_within_ratio=float("nan") if check is None else check.cross_within_ratio,
+                survivor_match_count=survivor.match_count,
+                absorbed_match_count=absorbed.match_count,
+            )
+        )
+        return survivor
+
+    def _fold(self, store: ConceptStore, ltm: Concept, cand: Concept, step: int) -> None:
+        """FR-8.2 fold: ref_set + ref_count_seen move, nothing else — the
+        LTM centroid stays bit-frozen and its match statistics untouched
+        (decision 18); kappa/taus recomputed for the new ref_set (T4 rule;
+        LTM branch = pure FR-5.1)."""
+        sim = float(ltm.centroid @ cand.centroid)
+        union = np.vstack([ltm.ref_set, cand.ref_set])
+        ltm.ref_set = self._bounded_union(union, step, ltm.concept_id, cand.concept_id)
+        ltm.ref_count_seen += cand.ref_count_seen
+        ltm.kappa = estimate_kappa(ltm.ref_set)
+        recompute_thresholds(ltm, self._config, self._prior)
+        ltm.merged_from.extend([cand.concept_id, *cand.merged_from])
+        store.remove(cand.concept_id)
+        self.merge_log.append(
+            MergeRecord(
+                step=int(step),
+                kind="stm_ltm",
+                survivor_id=ltm.concept_id,
+                absorbed_id=cand.concept_id,
+                centroid_sim=sim,
+                cross_within_ratio=float("nan"),
+                survivor_match_count=ltm.match_count,
+                absorbed_match_count=cand.match_count,
+            )
+        )
+
+    def _bounded_union(self, union: np.ndarray, step: int, survivor_id: str, absorbed_id: str) -> np.ndarray:
+        """Decision 19: cap the union at K_max via a uniform no-replacement
+        subsample from the dedicated merge substream (original row order
+        preserved); the survivor's reservoir Generator is never consumed."""
+        k_max = self._config.K_max_refset
+        if union.shape[0] <= k_max:
+            return np.array(union)
+        rng = make_rng(self._config.seed, f"merge/{step}/{survivor_id}<-{absorbed_id}")
+        idx = np.sort(rng.choice(union.shape[0], size=k_max, replace=False))
+        return np.array(union[idx])
