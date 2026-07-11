@@ -17,6 +17,9 @@ Added at T5:
     path's acceptance decisions read only per-concept tau/tau_vmf; the global
     prior is reachable solely from the seeding and threshold-recompute
     (shrinkage) code paths.
+Added at T7:
+  - invariant 3: |STM| <= stm_capacity after every step. This is also
+    TASKS-T7's test_capacity_invariant (one test, both lists).
 """
 
 import ast
@@ -197,6 +200,70 @@ def test_concept_id_uniqueness_invariant():
     ids = [c.concept_id for c in store.concepts]
     assert len(ids) == len(set(ids)), "duplicate concept_id in a single run"
     assert len(store.stm) > 1, "the stream must actually have seeded candidates"
+
+
+# Invariant 3 (T7+): STM capacity <= Δ at every step. This is TASKS-T7's
+# test_capacity_invariant, placed here because it IS the cross-cutting
+# invariant: a random 2,000-step fixture stream with heavy novelty (one-off
+# distractors seed relentlessly) must never leave |STM| above stm_capacity
+# after any route call — the drain-while eviction at the tier-3 seeding site
+# (the only STM growth site) is what enforces it.
+
+
+def test_capacity_invariant():
+    from fpcmc.concepts import Concept, ConceptStore
+    from fpcmc.config import FPCMCConfig
+    from fpcmc.rng import make_rng
+    from fpcmc.scorers import estimate_kappa
+    from fpcmc.thresholds import compute_global_prior, recompute_thresholds
+    from tests.fixtures.vmf_world import VMFWorld
+
+    config = FPCMCConfig(stm_capacity=8)
+    world = VMFWorld(seed=31, k_known=2, k_novel=3)
+    pool = world.t0_pool(n_per_class=30)
+
+    def _ltm(i: int, name: str) -> Concept:
+        ref = np.array(pool.x[pool.labels == name])
+        centroid = ref.mean(axis=0)
+        centroid /= np.linalg.norm(centroid)
+        return Concept(
+            concept_id=f"ltm_{i:03d}",
+            centroid=centroid,
+            ref_set=ref,
+            tau=0.5,
+            kappa=estimate_kappa(ref),
+            status="LTM",
+            provenance="initial",
+            rng=make_rng(31, f"invariants/capacity/reservoir/ltm_{i:03d}"),
+        )
+
+    concepts = [_ltm(i, name) for i, name in enumerate(world.known_names)]
+    prior = compute_global_prior(concepts, config)
+    for c in concepts:
+        recompute_thresholds(c, config, prior)
+    store = ConceptStore(config, prior, concepts)
+
+    # 2,000 steps: 800 known + 600 novel + 600 unique distractors, shuffled.
+    queries = np.vstack(
+        [world.sample_class(n, 400, stream="invariants/capacity") for n in world.known_names]
+        + [world.sample_class(n, 200, stream="invariants/capacity") for n in world.novel_names]
+        + [world.distractor_point(i)[None, :] for i in range(600)]
+    )
+    perm = make_rng(31, "invariants/capacity/perm").permutation(len(queries))
+    assert len(queries) == 2000
+
+    n_seeds = 0
+    for step, z in enumerate(queries[perm]):
+        r = store.route(z, step)
+        n_seeds += r.tier == 3
+        assert len(store.stm) <= config.stm_capacity, f"|STM| > Δ after step {step}"
+
+    # The pressure must be real, and the books must reconcile: every seeded
+    # candidate is either still resident or has an eviction record (no
+    # promotion path exists until T8).
+    assert len(store.eviction_log) > 0, "the stream never hit capacity — no LRU pressure"
+    assert len(store.stm) == n_seeds - len(store.eviction_log)
+    assert len(store.ltm) == len(world.known_names), "LTM concepts must survive (FR-3.1)"
 
 
 # Invariant 5 (T5+): no global threshold in the decision cascade. The FR-9
