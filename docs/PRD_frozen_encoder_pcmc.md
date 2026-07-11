@@ -332,7 +332,7 @@ fpcmc/
 
 *As built at T0 (owner-confirmed 2026-07-10): `eval/`, `baselines/`, `configs/`, `tests/` are top-level siblings of `fpcmc/` — the nesting above was a formatting artifact — joined by top-level `lib/` (frozen vendored source-project modules), `reference/` (read-only pinned submodules), `docs/`, and `data/` (contract README only; embeddings resolve externally via `roots.env`, never a local `data/embeddings/`).*
 
-- **M1 (days 1–3):** `concepts.py`, `scorers.py`, thresholds; unit tests green. LTM-only routing reproduces batch knn_vmf detection AUROC on P1 within ±0.01 (sanity gate).
+- **M1 (days 1–3):** `concepts.py`, `scorers.py`, thresholds; unit tests green. LTM-only routing reproduces batch knn_vmf detection AUROC on P1 within ±0.01 (sanity gate). *(2026-07-11, owner: "batch knn_vmf detection AUROC" = the STATIC batch detector — frozen 50k-train gallery, growth disabled, pre-promotion, 20th-NN statistic — pinned in `tests/reference_numbers.yaml` `t6_m1_gate`. Not the streaming run's whole-stream AUROC, whose gallery grows with promotions mid-stream; that record is preserved as `source_streaming_knn_vmf_run`, not a gate reference.)*
 - **M2 (days 4–6):** STM dynamics, promotion, wake loop; end-to-end P1 run with logging.
 - **M3 (days 7–9):** merging, residual clustering, per-concept τ recomputation; ablation flags.
 - **M4 (days 10–12):** P2 protocol, full metrics/figures, baselines wired, 3-seed runs.

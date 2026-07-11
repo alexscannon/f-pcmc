@@ -47,6 +47,8 @@ REQUIRED_FILES = [
     "fpcmc/concepts.py",
     # T4 — per-concept adaptive thresholds
     "fpcmc/thresholds.py",
+    # T6 — LTM initialization (M1 gate)
+    "fpcmc/init.py",
 ]
 
 
