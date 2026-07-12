@@ -1,0 +1,60 @@
+# Golden-run config — the frozen configuration for the T11 golden gate
+# (test_golden_stream_end_to_end) on the frozen 2,000-step golden stream
+# (tests/fixtures/golden_stream.npz, 8 windows x window_W=250).
+#
+# PROVENANCE (2026-07-11): proposed by the coding agent under the owner's
+# in-session instruction to proceed on recommendations (the 2026-07-11 T8
+# acceptance ruling reserved this file's creation to the owner — ratify or
+# amend before treating it as owner-frozen). Values were chosen from first
+# principles BEFORE the gate first ran and are never tuned against gate
+# results (the ruling's binding constraint).
+#
+# Deviations from PRD §8 defaults, with rationale:
+#   stm_capacity: 16  — the golden-stream freeze requires <= ~25 so the 25
+#       planted distractors create real LRU pressure behind the
+#       burst-eviction assertion (CLAUDE.md; docs/CHANGES.md T1). 16 sits
+#       between the promotion-proven pressure regime (T8/T9 ran at 10) and
+#       the traffic-splitting regime T9 measured at 25, leaving room for
+#       same-class fragments to coexist until T10's consolidation merges
+#       them.
+#   T_merge / T_cluster / w_residual: 250 — hook cadences scaled to the
+#       2,000-step stream (the §8 defaults of 500 were sized for the ~13k
+#       P1 stream): one merge sweep and one residual-clustering opportunity
+#       per stream window, and singletons age into the residual pool after
+#       one full window without maturing — so consolidation can act between
+#       a novel class's appearances (they recur across >= 4 of 8 windows).
+# Everything else is the PRD §8 default; window_W=250 matches the frozen
+# stream's window size, and seed=42 is the primary evaluation seed.
+encoder: dinov3_vitl16
+scorer: knn_vmf
+k_ref: 5
+n_vmf_min: 10
+tau_percentile_q: 95
+n_shrink: 10
+alpha_stm_ema: 0.1
+K_max_refset: 64
+stm_capacity: 16
+n_mature: 5
+theta_promote: 30
+min_cohesion: 0.55
+sep_factor: 1.0
+m_windows: 3
+window_W: 250
+T_cluster: 250
+w_residual: 250
+T_merge: 250
+merge_sim: 0.8
+umap:
+  dim: 50
+  n_neighbors: 15
+  min_dist: 0.0
+  metric: cosine
+hdbscan:
+  min_cluster_sizes:
+  - 10
+  - 15
+  - 20
+  - 25
+  - 30
+  selection: eom
+seed: 42

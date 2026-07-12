@@ -494,6 +494,12 @@ class MergeSweeper:
 
     # --------------------------------------------------------------- mechanics
 
+    def fold_pair(self, store: ConceptStore, ltm: Concept, cand: Concept, step: int) -> None:
+        """Public FR-8.2 fold seam (additive, T11): re-applies one logged
+        stm_ltm fold with the exact ``_fold`` mechanics — the replay module
+        must reconstruct folds through T9 code, not a reimplementation."""
+        self._fold(store, ltm, cand, step)
+
     def merge_pair(
         self,
         store: ConceptStore,
