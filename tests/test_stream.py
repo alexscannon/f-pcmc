@@ -446,8 +446,18 @@ def test_golden_stream_end_to_end(tmp_path):
             f"{cls}: only {tier1}/{len(post)} post-promotion arrivals at tier 1"
         )
 
-    # 5. Known-class expanding accuracy >= 0.95 throughout (every window end).
+    # 5. Known-class expanding accuracy at every window end (TASKS T11, owner
+    #    amendment 2026-07-11 from the flat >= 0.95). A known arrival is
+    #    correct only if its OWN LTM accepts it at tier 1, and FR-5.1 puts that
+    #    concept's tau at the q-th percentile of its own LOO scores -- so
+    #    ~(1 - q/100) of its own arrivals fall beyond its own tau by
+    #    construction. Accuracy is thus ceilinged at tau_percentile_q/100, and
+    #    the floor is that ceiling less a 3-sigma binomial band at the n known
+    #    arrivals seen so far (n grows across window ends, so the band does
+    #    too). Q-LINKED: this is derived from config, not hardcoded, so it
+    #    tracks tau_percentile_q automatically.
     #    T0 concepts are ltm_{i:03d} in sorted class order (T6 decision 2).
+    ceiling = config.tau_percentile_q / 100.0
     known_to_ltm = {cls: f"ltm_{i:03d}" for i, cls in enumerate(known_classes)}
     for end in range(249, 2000, 250):
         seen = [s for s in range(end + 1) if labels[s].startswith("known_")]
@@ -455,15 +465,44 @@ def test_golden_stream_end_to_end(tmp_path):
             1 for s in seen if step_concept[s] == known_to_ltm[labels[s]] and step_tier[s] == 1
         )
         acc = correct / len(seen)
-        assert acc >= 0.95, f"expanding accuracy {acc:.4f} < 0.95 at step {end}"
+        floor = ceiling - 3.0 * math.sqrt(ceiling * (1.0 - ceiling) / len(seen))
+        assert acc >= floor, (
+            f"expanding accuracy {acc:.4f} < {floor:.4f} at step {end} "
+            f"(n={len(seen)}, ceiling={ceiling})"
+        )
 
-    # 6. "Unknown" residual at end < 5% of novel-class examples: a novel
-    #    example is residual iff its arrival-time container does not
-    #    lineage-resolve into an end-of-stream LTM concept.
-    novel_steps = [s for s in range(len(labels)) if labels[s] in novel_classes]
-    residual = sum(1 for s in novel_steps if root(step_concept[s]) not in final_ltm)
-    assert residual / len(novel_steps) < 0.05, (
-        f"unknown residual {residual}/{len(novel_steps)} >= 5%"
+    # 6. Residual "unknown" rate for PROMOTED classes (TASKS T11, owner
+    #    amendment 2026-07-11). Population: the POST-promotion arrivals of each
+    #    promoted novel class -- PRD §7 states the metric as "residual unknowns
+    #    for promoted classes", and PRD §7.3 makes "unknown" a CORRECT
+    #    prediction for a class not yet promoted, so pre-promotion arrivals
+    #    cannot count against it. Bound: the same q-linked tau tail as clauses
+    #    4 and 5, from the other side -- a promoted concept's tau rejects
+    #    ~(1 - q/100) of its own class by construction, and those arrivals fall
+    #    to tier 2/3, where FR-9.1 emits "unknown". So the unknown rate has a
+    #    structural FLOOR of 1 - q/100, and the bound is that floor plus a
+    #    3-sigma binomial band. (A post-promotion arrival is "unknown" exactly
+    #    when it did not route at tier 1, so this is the complement of clause 4
+    #    -- the two must stay consistent.)
+    #    Q-LINKED: derived from config, so it tracks tau_percentile_q.
+    unknown_floor = 1.0 - ceiling
+    post_all: list[int] = []
+    n_unknown = 0
+    for cls in novel_classes:
+        owner = next(cid for cid in promoted_final if majority.get(cid) == cls)
+        p_step = min(
+            step for cid, step in promote_step.items() if root(cid) == owner
+        )
+        post = [s for s in range(len(labels)) if labels[s] == cls and s > p_step]
+        post_all += post
+        n_unknown += sum(1 for s in post if step_tier[s] != 1)
+    bound = unknown_floor + 3.0 * math.sqrt(
+        unknown_floor * (1.0 - unknown_floor) / len(post_all)
+    )
+    assert n_unknown / len(post_all) < bound, (
+        f"residual unknown rate {n_unknown}/{len(post_all)} = "
+        f"{n_unknown / len(post_all):.4f} >= {bound:.4f} "
+        f"(structural floor {unknown_floor}, n={len(post_all)})"
     )
 
 

@@ -124,7 +124,7 @@ from typing import Optional
 
 import numpy as np
 
-from fpcmc.concepts import Concept, ConceptStore
+from fpcmc.concepts import Concept, ConceptStore, cohesion
 from fpcmc.config import FPCMCConfig
 from fpcmc.rng import make_rng
 from fpcmc.scorers import estimate_kappa, make_scorer
@@ -181,18 +181,20 @@ class PromotionDecision:
     window_count: int
 
 
-def cohesion(ref_set: np.ndarray) -> float:
-    """FR-7 criterion 2 statistic: mean pairwise cosine similarity within the
-    ref_set, over distinct pairs (self-pairs excluded; see module docstring).
-
-    A single-member ref_set is vacuously cohesive (1.0) — unreachable for a
-    mature candidate, whose ref_set holds the seed plus >= n_mature matches.
-    """
-    k = ref_set.shape[0]
-    if k < 2:
-        return 1.0
-    g = ref_set @ ref_set.T
-    return float((g.sum() - np.trace(g)) / (k * (k - 1)))
+# FR-7 criterion 2 statistic. Defined in fpcmc.concepts (a pure function of a
+# ref_set) and re-exported here: the FR-9 tier-1 cohesion gate reads the same
+# statistic, and the two must never disagree. Imported above; re-exported for
+# the callers (and tests) that reach for `fpcmc.memory.cohesion`.
+__all__ = [
+    "cohesion",
+    "CRITERIA",
+    "PromotionEvaluator",
+    "PromotionDecision",
+    "PromotionRecord",
+    "MergeSweeper",
+    "MergeCheck",
+    "MergeRecord",
+]
 
 
 class PromotionEvaluator:
@@ -456,7 +458,22 @@ class MergeSweeper:
         """FR-8.2 phase: fold every STM candidate whose centroid is ACCEPTED
         by an LTM concept (the exact complement of T8's separation criterion
         at sep_factor=1) into the best-margin accepting LTM concept — the
-        frozen ``Scorer.select`` semantics, lexicographic tie-break included.
+        frozen ``Scorer.select`` semantics, lexicographic tie-break included —
+        AND whose centroid is at least ``merge_sim`` similar to that concept's.
+
+        The similarity floor is the 2026-07-11 owner ruling (docs/CHANGES.md).
+        Acceptance alone is not a safe fold trigger: a fold unions the
+        candidate's ref_set into the LTM concept, so a bad fold corrupts a
+        consolidated memory permanently. Worse, acceptance is measured against
+        the LTM's OWN tau, which FR-5.1 recalibrates from its own ref_set — so
+        a concept that absorbs one bad fold gets a looser tau, which makes it
+        accept a worse candidate, which loosens tau further, *within a single
+        fixpoint sweep*. Observed on the golden stream before this guard:
+        ltm_006 folded in a candidate at centroid similarity 0.078, its tau
+        inflated 5x (0.139 -> 0.701), its cohesion collapsed to 0.29, and it
+        went on to capture 169 known-class arrivals belonging to the other
+        seven classes. FR-8.1 condition 1 is the guard PRD §11 already relies
+        on against near-OOD collapse; the fold path simply never applied it.
         """
         folded = True
         while folded:
@@ -465,9 +482,83 @@ class MergeSweeper:
                 selection = self._scorer.select(cand.centroid, store.ltm)
                 if selection is None:
                     continue
+                if not self.similar_enough(selection.concept, cand):
+                    continue
                 self._fold(store, selection.concept, cand, step)
                 folded = True
                 break
+
+    def similar_enough(self, a: Concept, b: Concept) -> bool:
+        """FR-8.1 condition 1 alone: centroid cosine similarity >= merge_sim.
+
+        Condition 2 (the cross/within ratio) is deliberately NOT applied: it is
+        unobservable for singletons (T9 decision 20: K < 2 has no
+        within-structure), which is exactly why the guarded call site below
+        originally ran unguarded.
+
+        SCOPE: this is the FR-8.2 fold guard, and it is a CENTROID-vs-CENTROID
+        test. `merge_sim` is calibrated for centroids-of-many and only means
+        what it says at that scale — measured on the real DINOv3 pools,
+        same-class 20-sample half-centroids score 0.94-0.98 and cross-class
+        pairs 0.16-0.51, so 0.80 separates them cleanly. Do NOT reuse this for
+        singleton admission: a same-class SINGLE embedding scores only ~0.735
+        against its own class centroid (cross-class ~0.241), so a 0.80 bar
+        refuses 68% of genuine same-class singletons. The residual path uses
+        ``accepts_into`` instead.
+        """
+        sim = float(a.centroid @ b.centroid)
+        return sim >= self._config.merge_sim
+
+    def accepts_into(self, host: Concept, other: Concept) -> bool:
+        """Does ``host`` accept ``other``'s centroid under the frozen scorer?
+
+        The scale-correct admission test for merging a SINGLETON (or any small
+        candidate) into a host concept — the 2026-07-11 owner ruling
+        (docs/CHANGES.md). A fixed cosine bar cannot serve both scales: a
+        centroid-of-many and a single embedding live at completely different
+        similarity ranges, and on real data no constant separates same-class
+        singletons (~0.735, min 0.497) from cross-class ones (~0.241, max
+        0.583) cleanly.
+
+        `tau` is exactly the right instrument: it IS a per-concept, adaptively
+        calibrated acceptance radius for SINGLE embeddings (FR-5.1 fits it to
+        the concept's own LOO score distribution), so it auto-scales to each
+        class's true spread instead of imposing one global constant on classes
+        whose real cohesion ranges 0.49-0.70. This is the same question routing
+        asks of every arrival — "does this embedding belong to this concept?" —
+        answered by the same frozen scorer.
+
+        BUT the instrument only exists where it has been calibrated. A host
+        with ref_set size 1 has no LOO distribution to fit, so FR-5.1 holds its
+        tau at the global prior (T4's below-the-floor rule; T5 decision 3 seeds
+        every singleton with prior.tau). Testing against that is not a
+        per-concept judgement at all — it is a global constant, and a tight one:
+        on the golden stream prior.tau = 0.1537, i.e. it would demand cosine
+        similarity >= 0.846, STRICTER than the merge_sim bar this replaces.
+        A singleton host is therefore not consulted through tau at all — it has
+        no opinion to offer, only the prior's.
+
+        So admission is the DISJUNCTION of the two scale-appropriate tests, one
+        for each regime, and a pair is refused only when BOTH refuse:
+
+          * the host has a calibrated tau (ref_set >= 2) and accepts the
+            other's centroid — the singleton-scale test, which is the only one
+            that works when `other` is a lone embedding (real data: same-class
+            singleton-vs-centroid 0.735, which no 0.8 cosine bar admits); or
+          * their centroids are >= merge_sim similar — the centroid-scale test,
+            which is the only one available when the host is itself a singleton
+            with nothing but the prior.
+
+        Neither test admits the incoherent merges: the blobs this guard exists
+        to prevent were singleton-into-singleton fusions of unrelated classes
+        at centroid similarity 0.12-0.48 (down to -0.443), which fail the
+        cosine bar, while their singleton hosts have no calibrated tau to
+        appeal to. Both doors are shut for them; both are open for genuine
+        consolidation at either scale.
+        """
+        if host.ref_set.shape[0] >= 2 and self._scorer.accepts(other.centroid, host):
+            return True
+        return self.similar_enough(host, other)
 
     def _sweep_ltm_ltm(self, store: ConceptStore, step: int) -> None:
         """FR-8.3 phase: FR-8.1 rule over provenance="promoted" pairs only —

@@ -219,20 +219,80 @@ def test_trigger_conditions(mocker):
 # ------------------------------------------------- identity-preserving merge
 
 
+# Fixture geometry for the candidates below. Candidate i belongs to "class"
+# i // 2 and sits at its own angular offset from that class axis, so candidates
+# 0-1 are a genuine same-class pair and 2-3 are another, while the two classes
+# are orthogonal. Matches land NEAR a candidate's center in a direction private
+# to each match, so a ref_set acquires REAL internal spread.
+_CLASS_AXIS = (0, 1)
+_T_WITHIN = 0.36927   # sim(candidate_a, candidate_b) = 1/(1+t^2) = 0.88
+_S_MATCH = 0.2295     # sim(center, match)  = 1/sqrt(1+s^2) = 0.975
+_TAU_PRIOR = 0.10     # tight enough that a same-class sibling still SEEDS
+
+
+def _candidate_center(i: int) -> np.ndarray:
+    z = np.zeros(D)
+    z[_CLASS_AXIS[i // 2]] = 1.0
+    z[4 + i] = _T_WITHIN          # axes 4..7: one private offset per candidate
+    return z / np.linalg.norm(z)
+
+
+def _candidate_match(i: int, m: int) -> np.ndarray:
+    z = _candidate_center(i)
+    z = z.copy()
+    z[12 + 4 * i + m] = _S_MATCH  # axes 12..: private per (candidate, match)
+    return z / np.linalg.norm(z)
+
+
 def _build_candidates_and_pool(store, rc, match_counts):
-    """Candidates on basis axes with the given match_counts, plus 30 pooled
-    distractor seeds (random directions, seeded at step 20, pooled at 30)."""
+    """Four candidates in TWO genuine same-class pairs (0-1, 2-3) with the
+    given match_counts, plus 30 pooled distractor seeds (random directions,
+    seeded at step 20, pooled at 30).
+
+    FIXTURE REDESIGN (2026-07-11 owner ruling; docs/CHANGES.md). The candidates
+    used to sit on mutually ORTHOGONAL basis axes, and the merge test asserted
+    that a mocked HDBSCAN grouping merged them anyway — which pinned the
+    superseded contract that "clustering evidence stands in for the
+    two-condition check". Merging orthogonal concepts is now exactly what the
+    FR-6 admission guard exists to refuse, so that geometry can no longer stand.
+    Every ASSERTION in the tests below is unchanged; only the geometry is now
+    one a real cluster could actually have.
+
+    Two properties make it a faithful miniature of the real dynamic:
+      * each pair is genuinely same-class (centroid sim 0.88 > merge_sim), so
+        consolidating them is the CORRECT outcome the guard must still allow;
+      * they nonetheless SEED separately, because at seed time the host's tau
+        is still tight — which is precisely why FR-6 consolidation has to exist
+        at all, and precisely the case the guard must not throw away.
+    Matches are spread around each center rather than being identical copies of
+    the seed: a degenerate ref_set has LOO scores of 0, which drives tau BELOW
+    the prior and yields a concept incapable of ever admitting a neighbour.
+    """
     cand_ids = []
     for i, n_matches in enumerate(match_counts):
-        z = _axis(i)
+        z = _candidate_center(i)
         # Deliberately NOT note_seed'd: keeps the pool = the 30 distractor
         # seeds below (what note_seed sees is the runner's wiring choice;
         # pool membership is pinned by the aging tests above).
         result = store.route(z, i)
-        assert result.tier == 3
+        assert result.tier == 3, (
+            f"test premise: candidate {i} must SEED (a same-class sibling is "
+            f"{1 - float(_candidate_center(i) @ _candidate_center(i - 1)):.3f} "
+            f"away, tau_prior={_TAU_PRIOR}), got {result}"
+        )
         cand_ids.append(result.concept_id)
         for m in range(n_matches):
-            _match(store, cand_ids[-1], z, 10 + 4 * m + i)
+            _match(store, cand_ids[-1], _candidate_match(i, m), 10 + 4 * m + i)
+
+    # Premise: each mocked pair really is same-class-similar (so the guard
+    # SHOULD admit it), and the two classes really are far apart.
+    if len(cand_ids) == 4:
+        for a, b in ((0, 1), (2, 3)):
+            sim = float(store.get(cand_ids[a]).centroid @ store.get(cand_ids[b]).centroid)
+            assert sim >= 0.8, f"test premise: pair ({a},{b}) sim {sim:.3f} < merge_sim"
+        cross = float(store.get(cand_ids[0]).centroid @ store.get(cand_ids[2]).centroid)
+        assert cross < 0.3, f"test premise: the two classes must be far apart, got {cross:.3f}"
+
     rng = make_rng(SEED, "t10/merge-pool-dirs")
     for _ in range(RESIDUAL_POOL_MIN):
         _seed_singleton(store, rc, _random_unit(rng), 20)
@@ -246,7 +306,7 @@ def test_identity_preserving_merge(mocker):
     candidates: they merge pairwise via the T9 merge path (lineage recorded,
     kind="residual"); no new concept_ids are created by this pathway."""
     config = _config(w_residual=10, T_cluster=100)
-    store, rc = _make(config)
+    store, rc = _make(config, tau_prior=_TAU_PRIOR)
     cand_ids = _build_candidates_and_pool(store, rc, match_counts=(3, 2, 1, 1))
     ids_before = {c.concept_id for c in store.concepts}
 
@@ -285,7 +345,7 @@ def test_noise_untouched(mocker):
     """TASKS T10: mock all-noise labels: candidates bitwise unchanged and
     still LRU-eligible; the pool is not consumed (decision 23)."""
     config = _config(w_residual=10, T_cluster=100, stm_capacity=32)
-    store, rc = _make(config)
+    store, rc = _make(config, tau_prior=_TAU_PRIOR)
     cand_ids = _build_candidates_and_pool(store, rc, match_counts=(0, 0))
     mocker.patch.object(ResidualClusterer, "_cluster", return_value=[])
 
