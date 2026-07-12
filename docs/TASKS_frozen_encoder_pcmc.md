@@ -242,6 +242,8 @@ Extend `ConceptStore`: STM capacity `Δ`, LRU eviction on `last_matched_at` (tie
 **Scope**
 `fpcmc/residual.py` — residual pool of embeddings whose singleton concepts failed to mature within `w_residual` steps; trigger every `T_cluster` steps when pool ≥ 30; wraps `lib/` UMAP+HDBSCAN; HDBSCAN groups over pool ∪ immature-STM centroids drive **merges of existing immature candidates** (never fresh anonymous clusters — identities preserved); noise points untouched.
 
+*(Pool-entry ruling, 2026-07-11 — owner edit, re-applying the ruling recorded in the T8-acceptance entry of docs/CHANGES.md whose TASKS annotation was never saved. An immature singleton **evicted before `s + w_residual`** contributes its seed embedding to the residual pool **at eviction time** — the embedding only; the evicted concept and its id stay dead (invariant 4: ids are never reused, and eviction is not undone). Survivors enter at `s + w_residual` as specified above. Matured singletons never enter. Rationale: under real LRU pressure most singletons are evicted before they can age in, so an aging-only pool would starve the FR-6.1 ≥ 30 trigger of exactly the density context it exists to accumulate. This is as-built at T10 — see docs/CHANGES.md T10, decision 22.)*
+
 **Tests**
 - [U] `test_pool_aging` — singleton seeded at step s enters pool exactly at s + w_residual if still immature; matured singletons never enter.
 - [U] `test_trigger_conditions` — no run below 30 pool items or off-schedule (spy on the clustering call).
@@ -267,7 +269,7 @@ Extend `ConceptStore`: STM capacity `Δ`, LRU eviction on `last_matched_at` (tie
   - all 3 recurring novel classes promoted, each exactly once (fragmentation index = 1.0);
   - burst class: zero promotions, ≥ 1 eviction record;
   - end-of-stream purity of each promoted concept ≥ 0.95 against fixture ground truth;
-  - post-promotion samples of promoted classes routed at tier 1 (promotion-aware routing, measured: ≥ 90% of that class's post-promotion arrivals);
+  - post-promotion samples of promoted classes routed at tier 1 (promotion-aware routing, measured: ≥ 0.85 of that class's post-promotion arrivals); *(Amended 2026-07-11 from the original ≥ 90% literal — owner edit. Derivation: this rate has a structural ceiling at `tau_percentile_q`/100 = 0.95. τ is calibrated at the q-th percentile of a concept's own LOO scores (FR-5.1), so ~5% of that concept's own in-distribution arrivals fall beyond τ by construction and cannot be accepted by it at tier 1 — no implementation can clear 0.95 in expectation. The smallest post-promotion arrival count on the frozen golden stream is n ≈ 49, so the 3σ binomial band below the ceiling is 3·√(0.95·0.05/49) ≈ 0.093, giving 0.95 − 0.093 ≈ 0.857. The floor is therefore 0.85; the old 90% literal sat inside the sampling noise of its own ceiling and could fail a correct implementation on draw luck alone. **The floor is q-linked: re-derive it if `tau_percentile_q` changes.**)*
   - known-class expanding accuracy ≥ 0.95 throughout;
   - "unknown" residual at end < 5% of novel-class examples.
   **This test is the executable specification of the whole system.** If any assertion fails, the responsible mechanism's task is reopened. *(Golden-run config note, 2026-07-10: use `stm_capacity ≤ ~25` so the planted distractors create the LRU pressure behind the burst-eviction assertion. Distractors are one-off outliers, not novel classes — they enter none of the promotion/purity/coverage/unknown-residual denominators.)*

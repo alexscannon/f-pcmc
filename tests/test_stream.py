@@ -423,8 +423,14 @@ def test_golden_stream_end_to_end(tmp_path):
         purity = ls.count(majority[cid]) / len(ls)
         assert purity >= 0.95, f"{cid} ({majority[cid]}): purity {purity:.3f} < 0.95"
 
-    # 4. Promotion-aware routing: >= 90% of each promoted class's
-    #    post-promotion arrivals route at tier 1.
+    # 4. Promotion-aware routing: >= 0.85 of each promoted class's
+    #    post-promotion arrivals route at tier 1 (TASKS T11, owner amendment
+    #    2026-07-11 from the original 0.90). The rate is structurally ceilinged
+    #    at tau_percentile_q/100 = 0.95 -- FR-5.1 calibrates tau at the q-th
+    #    percentile of a concept's own LOO scores, so ~5% of its own arrivals
+    #    fall beyond its own tau by construction. 0.85 is that ceiling less a
+    #    3-sigma binomial band at the smallest post-promotion n (~49).
+    #    Q-LINKED: re-derive this floor if tau_percentile_q changes.
     promote_step = {
         r["concept_id"]: r["step"] for r in records if r["type"] == "promote"
     }
@@ -436,7 +442,7 @@ def test_golden_stream_end_to_end(tmp_path):
         post = [s for s in range(len(labels)) if labels[s] == cls and s > p_step]
         assert post, f"{cls}: no post-promotion arrivals (fixture guarantees some)"
         tier1 = sum(1 for s in post if step_tier[s] == 1)
-        assert tier1 / len(post) >= 0.90, (
+        assert tier1 / len(post) >= 0.85, (
             f"{cls}: only {tier1}/{len(post)} post-promotion arrivals at tier 1"
         )
 

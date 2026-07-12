@@ -3,20 +3,35 @@
 # (tests/fixtures/golden_stream.npz, 8 windows x window_W=250).
 #
 # PROVENANCE (2026-07-11): proposed by the coding agent under the owner's
-# in-session instruction to proceed on recommendations (the 2026-07-11 T8
-# acceptance ruling reserved this file's creation to the owner — ratify or
-# amend before treating it as owner-frozen). Values were chosen from first
-# principles BEFORE the gate first ran and are never tuned against gate
-# results (the ruling's binding constraint).
+# in-session instruction to proceed on recommendations; ratified and amended
+# by the owner (stm_capacity 16 -> 25) on 2026-07-11. Values were chosen from
+# first principles BEFORE the gate first ran, and neither the original values
+# nor the amendment were tuned against gate results (the T8-acceptance
+# ruling's binding constraint).
+#
+# **THIS CONFIG IS NOW FROZEN.** It is owner-pinned gate input, on the same
+# footing as tests/fixtures/golden_stream.npz: any further red on
+# test_golden_stream_end_to_end is a mechanism defect to be fixed in fpcmc/,
+# never a reason to touch a value here. Changing it requires owner approval.
 #
 # Deviations from PRD §8 defaults, with rationale:
-#   stm_capacity: 16  — the golden-stream freeze requires <= ~25 so the 25
-#       planted distractors create real LRU pressure behind the
-#       burst-eviction assertion (CLAUDE.md; docs/CHANGES.md T1). 16 sits
-#       between the promotion-proven pressure regime (T8/T9 ran at 10) and
-#       the traffic-splitting regime T9 measured at 25, leaving room for
-#       same-class fragments to coexist until T10's consolidation merges
-#       them.
+#   stm_capacity: 25  — bounded on both sides, and both bounds bind:
+#       LOWER — capacity must EXCEED the peak same-class fragment load, or
+#       consolidation cannot pay off. The prior-seeded singleton thresholds
+#       fragment each novel class into several concurrent candidates (T8/T9
+#       findings); T10's residual clustering coalesces them, but a coalesced
+#       candidate then has to SURVIVE the gap windows between its class's
+#       appearances (novel classes recur in >= 4 of 8 windows, so gaps are
+#       real) to reach theta_promote. At 16 the peak fragment load plus the
+#       LTM-adjacent churn evicts the coalesced candidate inside those gaps
+#       and the march to theta restarts; 25 leaves it resident.
+#       UPPER — capacity must stay BELOW the demand the 25 planted
+#       distractors plus normal seed churn place on STM, or nothing is ever
+#       evicted and the burst-eviction assertion tests nothing. This is the
+#       "<= ~25" the golden-stream freeze records (CLAUDE.md; CHANGES T1):
+#       25 one-off distractors alone saturate a 25-slot STM against any
+#       live candidate, so LRU pressure on the burst class is structural,
+#       not emergent. 25 is the largest value that keeps both bounds.
 #   T_merge / T_cluster / w_residual: 250 — hook cadences scaled to the
 #       2,000-step stream (the §8 defaults of 500 were sized for the ~13k
 #       P1 stream): one merge sweep and one residual-clustering opportunity
@@ -33,7 +48,7 @@ tau_percentile_q: 95
 n_shrink: 10
 alpha_stm_ema: 0.1
 K_max_refset: 64
-stm_capacity: 16
+stm_capacity: 25
 n_mature: 5
 theta_promote: 30
 min_cohesion: 0.55
