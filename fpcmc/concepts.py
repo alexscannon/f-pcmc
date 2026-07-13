@@ -450,6 +450,16 @@ class ConceptStore:
         self._ids_ever.add(cid)
         self._registry[cid] = concept
 
+    def remove(self, concept_id: str) -> Concept:
+        """Remove a concept from the live registry and return it (T9 merges).
+
+        Absorption is not forgetting: unlike ``_evict`` this writes no
+        EvictionRecord — the T9 MergeSweeper logs a MergeRecord instead. The
+        id stays burned in ``_ids_ever`` (invariant 4: never reused), so an
+        absorbed id can never reappear in routing. KeyError if absent.
+        """
+        return self._registry.pop(concept_id)
+
     def new_concept_id(self, kind: str) -> str:
         """Allocate the next zero-padded id (T5 decision 8; never reused).
 
