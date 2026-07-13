@@ -12,8 +12,26 @@ dynamics entry points:
 
 T5 adds ``ConceptStore`` (LTM + STM registries, store-owned concept-id
 allocation, the exact FR-9 three-tier decision cascade in ``route``) and
-``RoutingResult``. Approved T5 decisions (owner Q&A, 2026-07-11;
-docs/CHANGES.md T5):
+``RoutingResult``. T7 adds the FR-3.1 STM dynamics: capacity ``Δ``
+(config.stm_capacity) enforced at the tier-3 seeding site — the only STM
+growth site — by LRU eviction on ``last_matched_at`` (ties: older
+``created_at`` first, then smallest ``concept_id``), each eviction logged as
+an ``EvictionRecord``. FR-3.3 maturity needs no stored transition: tier
+membership is already a live ``match_count >= n_mature`` predicate at route
+time. Approved T7 decisions (owner Q&A, 2026-07-11; docs/CHANGES.md T7):
+
+  10. EvictionRecord.size = match_count at eviction (PRD FR-7 criterion 1
+      names match_count "Size"); age = step - created_at (lifetime). Beyond
+      the TASKS-literal four fields the record carries created_at,
+      last_matched_at and ref_count_seen so T11's JSONL `evict` records and
+      T13's eviction-composition metric need no extra plumbing.
+  11. Full LRU ties (last_matched_at AND created_at equal) evict the smallest
+      concept_id; capacity is a drain-while loop before the seed lands
+      (normally exactly one eviction; a store hand-built above Δ converges
+      back under it). LTM is exempt regardless of staleness; mature-but-
+      unpromoted STM candidates are NOT exempt (FR-3.1 exempts only LTM).
+
+Approved T5 decisions (owner Q&A, 2026-07-11; docs/CHANGES.md T5):
 
   5. RoutingResult.score is the winning concept's ScoreDetail.score (under
      knn_vmf: the composed scalar = knn_ref sub-score, per the T2 decision),
@@ -309,6 +327,26 @@ class RoutingResult:
     fallback: bool
 
 
+@dataclass(frozen=True)
+class EvictionRecord:
+    """FR-3.1 eviction log record (TASKS T7; owner decisions 10–11).
+
+    The "forgetting outliers" mechanism must be measurable: size is the
+    concept's match_count at eviction (PRD FR-7's "Size" vocabulary — post-
+    seed matches), age its lifetime ``step - created_at``. created_at /
+    last_matched_at / ref_count_seen ride along so staleness and eviction
+    composition (T13) are derivable straight from the record.
+    """
+
+    concept_id: str
+    size: int
+    age: int
+    step: int
+    created_at: int
+    last_matched_at: int
+    ref_count_seen: int
+
+
 _ID_WIDTH = {"ltm": 3, "stm": 4}  # PRD FR-1 literals: "ltm_037" / "stm_0142"
 _ID_PATTERN = re.compile(r"^(ltm|stm)_(\d+)$")
 
@@ -328,7 +366,13 @@ class ConceptStore:
     ``ltm``/``stm``/tier membership are live views computed from
     ``concept.status`` and ``match_count`` at route time — status is the
     single source of truth, so a T8 promotion (or a manual flip in tests)
-    participates in tier-1 routing on the very next call (FR-5.4).
+    participates in tier-1 routing on the very next call (FR-5.4), and it
+    simultaneously frees the promoted concept's STM capacity slot (T7 reads
+    the same live view).
+
+    T7 (FR-3.1): STM capacity ``config.stm_capacity`` is enforced in
+    ``_seed`` via LRU eviction; every eviction appends an ``EvictionRecord``
+    to the public ``eviction_log``. Evicted ids are never reused.
 
     ``vectorized`` selects the batch scoring path (default; T5 decision 9);
     ``vectorized=False`` routes through the frozen ``Scorer.select`` loop —
@@ -356,6 +400,7 @@ class ConceptStore:
         self._registry: dict[str, Concept] = {}
         self._ids_ever: set[str] = set()
         self._next_id = {"ltm": 0, "stm": 0}
+        self.eviction_log: list[EvictionRecord] = []
         for concept in concepts:
             self.register(concept)
 
@@ -495,8 +540,11 @@ class ConceptStore:
 
         Both thresholds bootstrap from the frozen global prior pair (T5
         decision 7); the reservoir Generator is the per-concept named
-        substream (approved T3 decision 3).
+        substream (approved T3 decision 3). As the only STM growth site,
+        this is also where FR-3.1 capacity is enforced (T7): the LRU victim
+        is evicted before the new candidate lands.
         """
+        self._evict_for_capacity(step)
         concept_id = self.new_concept_id("stm")
         concept = Concept.seed(
             z,
@@ -511,6 +559,42 @@ class ConceptStore:
         )
         self.register(concept)
         return concept
+
+    # ------------------------------------------------------- eviction (T7)
+
+    def _evict_for_capacity(self, step: int) -> None:
+        """FR-3.1: drain STM below capacity Δ so the next seed fits.
+
+        Victim order: least-recently-matched first (LRU on last_matched_at),
+        ties to older created_at, then to the smallest concept_id (owner
+        decision 11). Normally exactly one eviction per seed; a store built
+        above capacity converges back under Δ. Only the live STM view is
+        eligible — LTM is exempt regardless of staleness, mature-but-
+        unpromoted candidates are not.
+        """
+        stm = self.stm
+        while stm and len(stm) >= self._config.stm_capacity:
+            victim = min(stm, key=lambda c: (c.last_matched_at, c.created_at, c.concept_id))
+            self._evict(victim, step)
+            stm.remove(victim)
+
+    def _evict(self, concept: Concept, step: int) -> None:
+        """Remove a concept from the live registry and log the FR-3.1 record.
+
+        The id stays burned in ``_ids_ever`` (invariant 4: never reused).
+        """
+        del self._registry[concept.concept_id]
+        self.eviction_log.append(
+            EvictionRecord(
+                concept_id=concept.concept_id,
+                size=concept.match_count,
+                age=int(step) - concept.created_at,
+                step=int(step),
+                created_at=concept.created_at,
+                last_matched_at=concept.last_matched_at,
+                ref_count_seen=concept.ref_count_seen,
+            )
+        )
 
     # ------------------------------------------------------------ selection
 
