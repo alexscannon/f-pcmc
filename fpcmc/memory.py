@@ -234,7 +234,11 @@ class PromotionEvaluator:
 
     def _evaluate_one(self, concept: Concept, store: ConceptStore, step: int) -> PromotionDecision:
         config = self._config
-        coh = cohesion(concept.ref_set)
+        # `Concept.cohesion` is the cached form of the same `cohesion()` below —
+        # identical value, recomputed only when the ref_set actually changes.
+        # FR-7 is now its ONLY consumer (routing stopped gating on cohesion,
+        # 2026-07-13; see ConceptStore._tier1_stm).
+        coh = concept.cohesion
         sep = self._separation_margin(concept.centroid, store.ltm)
         checks = (
             ("size", concept.match_count >= config.theta_promote),
