@@ -57,6 +57,13 @@ REQUIRED_FILES = [
     "fpcmc/stream.py",
     "fpcmc/replay.py",
     "configs/golden_run.yaml",
+    # T12 — stream protocols P1/P2
+    "fpcmc/protocols.py",
+    # T13 — evaluation harness (gt mapping, metrics, orchestrator, figures)
+    "eval/gt.py",
+    "eval/metrics.py",
+    "eval/harness.py",
+    "eval/figures.py",
 ]
 
 

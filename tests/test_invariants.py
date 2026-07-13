@@ -20,6 +20,10 @@ Added at T5:
 Added at T7:
   - invariant 3: |STM| <= stm_capacity after every step. This is also
     TASKS-T7's test_capacity_invariant (one test, both lists).
+Added at T13:
+  - invariant 2: no ground-truth leakage — fpcmc/ never imports the eval/
+    package (TASKS-T13's test_gt_map_isolation, one test both lists) and the
+    FR-9 routing surface takes no label-shaped parameter.
 """
 
 import ast
@@ -354,4 +358,49 @@ def test_single_pass_invariant(tmp_path):
     steps = [r["step"] for r in read_log(log_path) if r["type"] in ("assign", "seed")]
     assert steps == list(range(stream.x.shape[0])), (
         "every stream index must be routed exactly once, in order"
+    )
+
+
+# Invariant 2 (T13+): no ground-truth leakage into the pipeline. The AST half
+# is TASKS-T13's test_gt_map_isolation; the runtime half asserts the routing
+# surface cannot even receive a label argument.
+
+
+def test_gt_map_isolation():
+    """TASKS T13: no module under fpcmc/ imports the gt-mapping package
+    (eval.*) — ground truth flows only through eval/ (invariant 2).
+
+    Also guards the runtime half: the FR-9 entry points take no parameter
+    that could carry a label (`route(z, step)`, `run(stream_x)`), so a label
+    cannot reach the store even accidentally.
+    """
+    import inspect
+
+    violations = []
+    for path in _py_files("fpcmc"):
+        for node in ast.walk(_parse(path)):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "eval" or alias.name.startswith("eval."):
+                        violations.append(f"{path}:{node.lineno} imports {alias.name}")
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                if node.module == "eval" or node.module.startswith("eval."):
+                    violations.append(f"{path}:{node.lineno} imports from {node.module}")
+    assert not violations, (
+        "ground truth lives in eval/ only; fpcmc/ must never import it "
+        "(invariant 2):\n" + "\n".join(violations)
+    )
+
+    from fpcmc.concepts import ConceptStore
+    from fpcmc.stream import StreamRunner
+
+    route_params = list(inspect.signature(ConceptStore.route).parameters)
+    assert route_params == ["self", "z", "step"], (
+        f"ConceptStore.route grew parameters {route_params} — a label-shaped "
+        "argument must never reach the routing surface (invariant 2)"
+    )
+    run_params = list(inspect.signature(StreamRunner.run).parameters)
+    assert run_params == ["self", "stream_x"], (
+        f"StreamRunner.run grew parameters {run_params} — the wake loop "
+        "consumes embeddings only (invariant 2)"
     )
