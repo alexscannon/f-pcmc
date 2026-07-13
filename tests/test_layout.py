@@ -51,6 +51,8 @@ REQUIRED_FILES = [
     "fpcmc/init.py",
     # T8 — promotion (memory.py; T9 adds merging to the same module)
     "fpcmc/memory.py",
+    # T10 — residual clustering (identity-preserving consolidation)
+    "fpcmc/residual.py",
 ]
 
 
