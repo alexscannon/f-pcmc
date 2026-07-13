@@ -49,6 +49,8 @@ REQUIRED_FILES = [
     "fpcmc/thresholds.py",
     # T6 — LTM initialization (M1 gate)
     "fpcmc/init.py",
+    # T8 — promotion (memory.py; T9 adds merging to the same module)
+    "fpcmc/memory.py",
 ]
 
 
