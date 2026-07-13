@@ -46,6 +46,15 @@ proceed-on-recommendations instruction; recorded in docs/CHANGES.md T11):
       merge records plus determinism). The config_header embeds the resolved
       config (NFR-2), n_steps, checkpoint_steps, and LOG_SCHEMA_VERSION.
       Nothing wall-clock enters the log (FR-9.2 byte determinism).
+
+T13 schema extension (LOG_SCHEMA_VERSION 2; owner-approved 2026-07-13, the
+same-session Q&A recorded in docs/CHANGES.md T13): assign and seed records
+carry ``novelty`` — the min tier-1 scorer scalar from RoutingResult, the
+continuous per-step novelty statistic behind §7.3's streaming detection
+AUROC/FPR@95 (NaN -> null when no tier-1 concept exists) — and checkpoint
+records carry ``taus``, a per-concept ``{concept_id: {status, tau, tau_vmf}}``
+snapshot for the §7.3 threshold-health / τ-distribution metrics. Both exist
+so the eval harness needs the log alone (NFR-3); both are deterministic.
 """
 
 from __future__ import annotations
@@ -64,7 +73,7 @@ from fpcmc.memory import MergeRecord, MergeSweeper, PromotionEvaluator, Promotio
 from fpcmc.residual import ResidualClusterer
 from fpcmc.thresholds import GlobalPrior
 
-LOG_SCHEMA_VERSION = 1
+LOG_SCHEMA_VERSION = 2
 
 
 def _finite(x: float) -> Optional[float]:
@@ -127,7 +136,12 @@ class StreamRunner:
         self._drain_evictions(f)
 
         if result.tier == 3:
-            self._emit(f, {"type": "seed", "step": step, "concept_id": result.concept_id})
+            self._emit(f, {
+                "type": "seed",
+                "step": step,
+                "concept_id": result.concept_id,
+                "novelty": _finite(result.novelty),
+            })
             self.residual.note_seed(result.concept_id, z, step)
         else:
             self._emit(f, self._assign_record(result, step))
@@ -165,6 +179,7 @@ class StreamRunner:
             "margin": _finite(result.margin),
             "via": result.via,
             "fallback": bool(result.fallback),
+            "novelty": _finite(result.novelty),
         }
 
     def _promote_record(self, rec: PromotionRecord) -> dict:
@@ -216,6 +231,16 @@ class StreamRunner:
             "n_promotions": len(self.promoter.promotion_log),
             "n_merges": len(self.sweeper.merge_log),
             "residual_pool_size": len(self.residual.pool_ids),
+            # T13 (schema v2): per-concept threshold snapshot for the §7.3
+            # τ-distribution / threshold-health metrics (log-only, NFR-3).
+            "taus": {
+                c.concept_id: {
+                    "status": c.status,
+                    "tau": _finite(c.tau),
+                    "tau_vmf": _finite(c.tau_vmf),
+                }
+                for c in self.store.concepts
+            },
         }
 
     def _drain_evictions(self, f: TextIO) -> None:

@@ -77,7 +77,7 @@ def _assert_results_equal(a: RoutingResult, b: RoutingResult) -> None:
     assert a.tier == b.tier
     assert a.via == b.via
     assert a.fallback == b.fallback
-    for fa, fb in ((a.score, b.score), (a.margin, b.margin)):
+    for fa, fb in ((a.score, b.score), (a.margin, b.margin), (a.novelty, b.novelty)):
         assert (math.isnan(fa) and math.isnan(fb)) or fa == fb
 
 

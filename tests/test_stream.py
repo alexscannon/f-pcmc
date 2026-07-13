@@ -190,11 +190,16 @@ def test_hook_schedule(mocker):
 # ---------------------------------------------------------------- log schema
 
 
+# Schema v2 (T13, owner-approved 2026-07-13): assign/seed gained "novelty"
+# (the min tier-1 scorer scalar — §7.3 streaming detection statistic) and
+# checkpoint gained "taus" (per-concept {status, tau, tau_vmf} snapshot for
+# the τ-distribution/threshold-health metrics). Additive only; no field was
+# removed or weakened.
 _REQUIRED_KEYS = {
     "config_header": {"type", "schema", "config", "n_steps", "checkpoint_steps"},
     "assign": {"type", "step", "concept_id", "prediction", "tier", "score",
-               "margin", "via", "fallback"},
-    "seed": {"type", "step", "concept_id"},
+               "margin", "via", "fallback", "novelty"},
+    "seed": {"type", "step", "concept_id", "novelty"},
     "evict": {"type", "step", "concept_id", "size", "age", "created_at",
               "last_matched_at", "ref_count_seen"},
     "promote": {"type", "step", "concept_id", "size", "cohesion",
@@ -203,7 +208,7 @@ _REQUIRED_KEYS = {
               "centroid_sim", "cross_within_ratio", "survivor_match_count",
               "absorbed_match_count"},
     "checkpoint": {"type", "step", "n_ltm", "n_stm", "n_concepts", "n_evictions",
-                   "n_promotions", "n_merges", "residual_pool_size"},
+                   "n_promotions", "n_merges", "residual_pool_size", "taus"},
 }
 
 
