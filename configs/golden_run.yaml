@@ -14,6 +14,14 @@
 # test_golden_stream_end_to_end is a mechanism defect to be fixed in fpcmc/,
 # never a reason to touch a value here. Changing it requires owner approval.
 #
+# AMENDED 2026-07-13 (owner-directed, forced by a spec change, NOT tuning):
+# `min_cohesion: 0.55` -> `min_cohesion_ratio: 0.35`. PRD FR-7 criterion 2 became
+# RELATIVE (cohesion >= ratio x median cohesion of the T0 LTM concepts) because an
+# absolute bar is unusable on real embeddings, and the old key is retired — this
+# file could not load without the rename. The new value is the PRD §8 default,
+# transcribed verbatim, exactly as the old one was; it was not chosen against gate
+# results. The gate was re-run after the change and is green.
+#
 # Deviations from PRD §8 defaults, with rationale:
 #   stm_capacity: 25  — bounded on both sides, and both bounds bind:
 #       LOWER — capacity must EXCEED the peak same-class fragment load, or
@@ -51,7 +59,7 @@ K_max_refset: 64
 stm_capacity: 25
 n_mature: 5
 theta_promote: 30
-min_cohesion: 0.55
+min_cohesion_ratio: 0.35
 sep_factor: 1.0
 m_windows: 3
 window_W: 250

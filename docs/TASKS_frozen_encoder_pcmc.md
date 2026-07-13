@@ -208,7 +208,7 @@ Extend `ConceptStore`: STM capacity `Δ`, LRU eviction on `last_matched_at` (tie
 **Tests**
 - [U] `test_each_criterion_blocks` — parameterized over the four criteria: construct a candidate passing exactly three and failing one; assert no promotion and the log names the failing criterion. Four cases:
   - size: 29 matches, all else passing;
-  - cohesion: two-lobe candidate (samples from two antipodal-ish fixture classes) with pairwise cos-sim below min_cohesion;
+  - cohesion: multi-lobe candidate (samples from mutually orthogonal fixture classes) with pairwise cos-sim below the FR-7 cohesion bar; *(2026-07-13, owner edit: FR-7 criterion 2 became RELATIVE — `min_cohesion_ratio` × median cohesion of the T0 LTM concepts, replacing the retired absolute `min_cohesion`; see PRD FR-7. The as-built fixture uses THREE lobes, not two: a two-lobe candidate coheres at ~0.43 and clears the relative bar (~0.36 in this world), and three lobes is anyway the truer shape of the blob this criterion exists to catch — many classes with few members each. A clean two-class blob can only arise from a cross-class merge, which the FR-6/FR-8.2 merge guards now prevent.)*
   - separation: candidate seeded inside a known LTM class (its centroid accepted by that LTM τ);
   - recurrence: 40 matches all within one window (the fixture "outlier burst" class).
 - [U] `test_promotion_happy_path` — recurring fixture novel class: promoted; assert atomically (single hook call): status=LTM, centroid frozen thereafter, τ ≠ pre-promotion shrunk τ and equals FR-5.1 recompute, STM occupancy decremented, log record complete.

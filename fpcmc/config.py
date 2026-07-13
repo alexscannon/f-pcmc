@@ -52,7 +52,11 @@ class FPCMCConfig:
     stm_capacity: int = 100             # sweep {50, 100, 200}
     n_mature: int = 5
     theta_promote: int = 30             # sweep {20, 30, 50}
-    min_cohesion: float = 0.55          # sweep {0.45, 0.55, 0.65}
+    # FR-7 criterion 2 is RELATIVE: cohesion >= this ratio x median(cohesion of
+    # the T0 LTM concepts). NOT an absolute cohesion bar — the retired
+    # `min_cohesion: 0.55` key meant something else entirely, so never carry an
+    # old config's number across (PRD FR-7, amended 2026-07-13).
+    min_cohesion_ratio: float = 0.35    # sweep {0.30, 0.35, 0.40}
     sep_factor: float = 1.0
     m_windows: int = 3
     window_W: int = 250

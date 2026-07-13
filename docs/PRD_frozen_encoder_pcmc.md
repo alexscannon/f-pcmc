@@ -195,7 +195,7 @@ Online single-linkage-to-centroid assignment can under-segment slowly. Retain a 
 A mature STM concept is promoted iff ALL of:
 
 1. **Size:** `match_count ≥ θ` (default 30, per PCMC).
-2. **Cohesion:** mean pairwise cosine similarity within ref_set ≥ `min_cohesion` (default 0.55; sweep in §8).
+2. **Cohesion:** mean pairwise cosine similarity within ref_set ≥ `min_cohesion_ratio · median(cohesion of the T0 LTM concepts)` (default ratio 0.35; sweep in §8). *(Amended 2026-07-13 — owner edit. Was: "≥ `min_cohesion` (default 0.55)", an ABSOLUTE bar. Measured on the real DINOv3 pools, an absolute bar cannot work: genuine single-class concepts span cohesion **0.165–0.708** — CIFAR-100 class tightness varies ~4× — while mixed multi-class blobs reach **0.541**, so the two populations OVERLAP and no constant separates "one class" from "several". At the old default 0.55, **96 of 100 genuine CIFAR classes fail this criterion**, i.e. promotion was very nearly blocked outright on real data; the synthetic fixture worlds all sit near 0.81, so no unit test could surface it. The bar is therefore taken RELATIVE to the encoder's own concepts, and re-derives itself if the encoder changes. Reference population = the `provenance="initial"` (T0) LTM concepts, which FR-2.1 guarantees are single-class and which no promotion can poison; median, not mean, so one odd class cannot drag it. **Ratio calibration** — the criterion is evaluated on a 64-member reservoir, so both tails are sampling-noisy and the ratio must be picked across draws, not from one: over 8 independent reservoir draws the hardest genuine class falls to **0.407×** the median and the worst many-class blob rises to **0.313×**, giving a safe window of **(0.313, 0.407)**. 0.35 sits inside it with margin at both ends (+11% above the worst blob, +16% below the hardest class); **0.45 does NOT — it would reject the hardest genuine class by 10%.** Known limit: this does not separate 2–4-class blobs of OOD classes, which overlap genuine classes irreducibly for ANY single cohesion bar — those arise only from cross-class merges, which the FR-6/FR-8.2 merge guards prevent (see docs/CHANGES.md T11). Rejected alternative: a τ-inflation criterion. τ is a k-NN statistic and therefore local — in a 2-class blob every member's nearest neighbours are same-class, so τ never inflates (near-OOD 2-class blobs measure 0.41–0.88× the median LTM τ, LOWER than most genuine classes), and even for the many-class blob it overlaps genuine classes (1.25–1.41× vs genuine up to 1.28×).)*
 3. **Separation:** margin to nearest existing LTM concept — `score(centroid_stm, c_ltm)` must exceed `sep_factor · τ_{c_ltm}` (default sep_factor 1.0) for all LTM concepts, i.e. the candidate's centroid would itself be rejected by every LTM concept. Prevents promoting duplicates of known classes.
 4. **Recurrence:** matches span ≥ `m_windows` (default 3) distinct time windows of length `W` (default 250 steps). This operationalizes "recurring novelty vs isolated outlier burst": a one-shot cluster of near-duplicates arriving together fails recurrence and eventually LRU-evicts.
 
@@ -299,7 +299,12 @@ K_max_refset: 64
 stm_capacity: 100                # sweep {50, 100, 200}
 n_mature: 5
 theta_promote: 30                # sweep {20, 30, 50}
-min_cohesion: 0.55               # sweep {0.45, 0.55, 0.65}
+min_cohesion_ratio: 0.35         # sweep {0.30, 0.35, 0.40} — FR-7 criterion 2 is
+                                 # RELATIVE to median(cohesion of T0 LTM concepts),
+                                 # not an absolute bar (amended 2026-07-13; the key
+                                 # `min_cohesion: 0.55` it replaces is RETIRED, not
+                                 # renamed — its value was an absolute cohesion, so
+                                 # an old config's number must never be reused here)
 sep_factor: 1.0
 m_windows: 3
 window_W: 250
