@@ -364,6 +364,15 @@ class RoutingResult:
     via:        sub-scorer that produced the margin ("knn_ref" / "vmf"; None
                 at tier 3) — event-log and A5-ablation metadata.
     fallback:   FR-4.2 fallback flag of the winning ScoreDetail.
+    novelty:    min over the TIER-1 population (LTM ∪ mature STM) of the
+                configured scorer's scalar score — the continuous statistic
+                behind the FR-9 "accepted-by-any-concept vs not" decision and
+                the same min-over-concepts statistic as the T6 M1 gate.
+                Carried at every tier (tiers 2/3 report how far the arrival
+                sat from the known world when it was rejected); NaN only when
+                the tier-1 population is empty. Additive T13 field
+                (owner-approved 2026-07-13) feeding the §7.3 streaming
+                detection AUROC/FPR@95 from the event log alone (NFR-3).
     """
 
     prediction: str
@@ -373,6 +382,7 @@ class RoutingResult:
     margin: float
     via: Optional[str]
     fallback: bool
+    novelty: float
 
 
 @dataclass(frozen=True)
@@ -544,7 +554,7 @@ class ConceptStore:
         concepts = list(self._registry.values())
 
         tier1 = [c for c in concepts if c.status == "LTM" or self._tier1_stm(c)]
-        hit = self._select(z, tier1)
+        hit, novelty = self._select(z, tier1)
         if hit is not None:
             concept, detail = hit
             self._assign(concept, z, step)
@@ -556,10 +566,11 @@ class ConceptStore:
                 margin=detail.margin,
                 via=detail.via,
                 fallback=detail.fallback,
+                novelty=novelty,
             )
 
         tier2 = [c for c in concepts if c.status == "STM" and not self._tier1_stm(c)]
-        hit = self._select(z, tier2)
+        hit, _ = self._select(z, tier2)
         if hit is not None:
             concept, detail = hit
             self._assign(concept, z, step)
@@ -571,6 +582,7 @@ class ConceptStore:
                 margin=detail.margin,
                 via=detail.via,
                 fallback=detail.fallback,
+                novelty=novelty,
             )
 
         concept = self._seed(z, step)
@@ -582,6 +594,7 @@ class ConceptStore:
             margin=float("nan"),
             via=None,
             fallback=False,
+            novelty=novelty,
         )
 
     def _tier1_stm(self, concept: Concept) -> bool:
@@ -691,16 +704,29 @@ class ConceptStore:
 
     # ------------------------------------------------------------ selection
 
-    def _select(self, z: np.ndarray, concepts: list[Concept]) -> tuple[Concept, "ScoreDetail"] | None:
-        """FR-4.3 best-margin assignment within one tier, or None."""
+    def _select(
+        self, z: np.ndarray, concepts: list[Concept]
+    ) -> tuple[tuple[Concept, "ScoreDetail"] | None, float]:
+        """FR-4.3 best-margin assignment within one tier (or None), plus the
+        min scorer scalar over the tier's population (NaN when empty) — the
+        RoutingResult.novelty statistic when the tier is tier 1.
+
+        The min is order-independent and both paths draw it from the same
+        per-concept scalar the frozen scorers compute, so the batch/loop
+        identity guard (test_vectorized_matches_loop) binds it too.
+        """
         if not concepts:
-            return None
+            return None, float("nan")
         if not self._vectorized:
             selection = self._scorer.select(z, concepts)
-            return None if selection is None else (selection.concept, selection.detail)
+            novelty = min(self._scorer.score(z, c) for c in concepts)
+            hit = None if selection is None else (selection.concept, selection.detail)
+            return hit, novelty
         return self._select_batch(z, concepts)
 
-    def _select_batch(self, z: np.ndarray, concepts: list[Concept]) -> tuple[Concept, "ScoreDetail"] | None:
+    def _select_batch(
+        self, z: np.ndarray, concepts: list[Concept]
+    ) -> tuple[tuple[Concept, "ScoreDetail"] | None, float]:
         """Batch scoring across concepts, bitwise-faithful to Scorer.select.
 
         T5 decision 9: per-concept scores use the exact frozen-scorer
@@ -768,9 +794,10 @@ class ConceptStore:
                 score = s_knn  # composed scalar = knn_ref sub-score (T2 decision)
                 via = ["vmf" if w else "knn_ref" for w in vmf_wins]
 
+        novelty = float(score.min())
         candidates = np.flatnonzero(accepted)
         if candidates.size == 0:
-            return None
+            return None, novelty
         best_margin = margin[candidates].max()
         tied = candidates[margin[candidates] == best_margin]
         w = int(min(tied, key=lambda i: concepts[i].concept_id))
@@ -782,4 +809,4 @@ class ConceptStore:
             via=via[w],
             fallback=bool(fallback[w]),
         )
-        return concepts[w], detail
+        return (concepts[w], detail), novelty

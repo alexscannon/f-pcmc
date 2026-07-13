@@ -22,6 +22,7 @@ dependencies = [
     # wheel index (see [tool.uv.sources]) — this is a CPU-only project
     # (PRD §2.2) and torch.load is build-independent.
     "torch==2.11.0",
+    "matplotlib==3.10.8",
 ]
 
 [dependency-groups]
