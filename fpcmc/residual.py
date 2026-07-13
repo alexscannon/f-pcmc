@@ -263,8 +263,41 @@ class ResidualClusterer:
             alive = [store.get(cid) for cid in candidate_ids if cid in store]
             if len(alive) < 2:
                 continue  # pool-only / single-candidate clusters: no-ops
+            # Anchor the cluster on its MOST POPULATED candidate — also the one
+            # T9's survivor rule (larger match_count, ties to smaller id) would
+            # elect anyway, so this reorders the comparisons without changing
+            # who survives. It matters because the guard below tests each
+            # candidate against the HOST's tau, and the most populated host has
+            # the best-calibrated tau.
+            alive.sort(key=lambda c: (-c.match_count, c.concept_id))
             survivor = alive[0]
             for other in alive[1:]:
+                # Admission guard on the clustering-driven path (2026-07-11
+                # owner ruling; docs/CHANGES.md). A shared HDBSCAN cluster is
+                # NOT sufficient evidence that two candidates are the same
+                # concept: this pool is a pool of OUTLIERS (tau-tail rejects of
+                # known classes, one-off distractors), and density clustering
+                # over outliers groups them as outliers, not as classes.
+                # Unguarded, this path merged candidates of different
+                # ground-truth classes at centroid similarities as low as
+                # -0.443 — anti-correlated embeddings unioned into one concept.
+                # The incoherent candidates it minted then poisoned an LTM
+                # concept through the FR-8.2 fold (whose own guard inspects the
+                # centroid but transfers the REF_SET, so a centroid-legitimate
+                # candidate carries its contaminated ref_set straight in).
+                #
+                # The test is the host's own tau, NOT a cosine bar: the
+                # candidates here are singletons, and tau is the only
+                # instrument in the system calibrated for single embeddings at
+                # each concept's own scale (see MergeSweeper.accepts_into). A
+                # fixed bar cannot serve both scales — on real data a 0.8 cosine
+                # bar refuses 68% of genuine same-class singletons.
+                #
+                # Re-checked against the CURRENT survivor each iteration: the
+                # T9 survivor rule means merge_pair may return `other`, so the
+                # host moves.
+                if not self.sweeper.accepts_into(survivor, other):
+                    continue
                 survivor = self.sweeper.merge_pair(
                     store, survivor, other, step, kind="residual"
                 )

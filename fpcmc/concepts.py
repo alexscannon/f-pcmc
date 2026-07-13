@@ -183,6 +183,13 @@ class Concept:
     alpha_ema: float = 0.10
     rng: Optional[np.random.Generator] = None
 
+    # Lazy cache for the `cohesion` property. Kept out of __init__/__repr__/
+    # __eq__ so it is invisible to construction and to the bitwise concept
+    # comparisons the determinism tests make.
+    _cohesion_cache: Optional[float] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
     def __post_init__(self) -> None:
         # Directly constructed concepts (tests, T6 init) start consistent:
         # every ref_set member has been "seen".
@@ -195,7 +202,27 @@ class Concept:
     def __setattr__(self, name: str, value: object) -> None:
         if name == "concept_id" and "concept_id" in self.__dict__:
             raise AttributeError("Concept.concept_id is immutable (FR-1.4 / invariant 4)")
+        # Wholesale ref_set replacement (T9 merges, the reservoir's vstack
+        # append) invalidates the cohesion cache here, so no caller has to
+        # remember to — unlike kappa, which merge sites must recompute
+        # themselves. In-place row replacement bypasses __setattr__ and is
+        # invalidated explicitly in add_observation.
+        if name == "ref_set":
+            super().__setattr__("_cohesion_cache", None)
         super().__setattr__(name, value)
+
+    @property
+    def cohesion(self) -> float:
+        """FR-7 criterion-2 statistic over the current ref_set, cached.
+
+        Read on every route by the FR-9 tier-1 cohesion gate, so it must not
+        be O(K^2 * D) per step: the cache is invalidated on every ref_set
+        mutation (see __setattr__ and add_observation), and a concept's ref_set
+        changes only on its own match — at most one recompute per step.
+        """
+        if self._cohesion_cache is None:
+            object.__setattr__(self, "_cohesion_cache", cohesion(self.ref_set))
+        return self._cohesion_cache
 
     def __delattr__(self, name: str) -> None:
         if name == "concept_id":
@@ -286,6 +313,8 @@ class Concept:
         if changed:
             self.kappa = _estimate_kappa(self.ref_set)
             self.refset_changes_since_tau += 1
+            # In-place reservoir replacement does not go through __setattr__.
+            self._cohesion_cache = None
 
 
 def _estimate_kappa(ref_set: np.ndarray) -> float:
@@ -293,6 +322,25 @@ def _estimate_kappa(ref_set: np.ndarray) -> float:
     from fpcmc.scorers import estimate_kappa
 
     return estimate_kappa(ref_set)
+
+
+def cohesion(ref_set: np.ndarray) -> float:
+    """Mean pairwise cosine similarity within the ref_set, over DISTINCT pairs
+    (self-pairs are trivially 1.0 and would dilute the statistic).
+
+    This is the FR-7 criterion-2 statistic. It lives here, not in fpcmc.memory,
+    because it is a pure function of a Concept's ref_set and has TWO consumers
+    that must never disagree: FR-7 promotion (fpcmc.memory re-exports this
+    name) and the FR-9 tier-1 cohesion gate below. One definition, no drift.
+
+    A single-member ref_set is vacuously cohesive (1.0) — unreachable for a
+    mature candidate, whose ref_set holds the seed plus >= n_mature matches.
+    """
+    k = ref_set.shape[0]
+    if k < 2:
+        return 1.0
+    g = ref_set @ ref_set.T
+    return float((g.sum() - np.trace(g)) / (k * (k - 1)))
 
 
 # ============================================================== routing (T5)
@@ -483,17 +531,19 @@ class ConceptStore:
     def route(self, z: np.ndarray, step: int) -> RoutingResult:
         """Exactly the FR-9 decision cascade (FR-3.3 routing order).
 
-        Tier 1: LTM ∪ mature-STM acceptance → best-margin assignment.
-        Tier 2: else immature-STM acceptance → assignment, prediction
-                "unknown" (immature candidates cannot claim traffic from
-                tier 1, however good their margin).
+        Tier 1: LTM ∪ tier1-eligible STM acceptance → best-margin assignment.
+        Tier 2: else the remaining STM acceptance → assignment, prediction
+                "unknown" (they cannot claim traffic from tier 1, however
+                good their margin).
         Tier 3: else seed a new STM singleton (FR-3.2), prediction "unknown".
+
+        The two STM sets partition the STM registry (`_tier1_stm` is the sole
+        predicate), so the cascade stays total.
         """
         z = np.asarray(z, dtype=np.float64)
-        n_mature = self._config.n_mature
         concepts = list(self._registry.values())
 
-        tier1 = [c for c in concepts if c.status == "LTM" or c.match_count >= n_mature]
+        tier1 = [c for c in concepts if c.status == "LTM" or self._tier1_stm(c)]
         hit = self._select(z, tier1)
         if hit is not None:
             concept, detail = hit
@@ -508,7 +558,7 @@ class ConceptStore:
                 fallback=detail.fallback,
             )
 
-        tier2 = [c for c in concepts if c.status == "STM" and c.match_count < n_mature]
+        tier2 = [c for c in concepts if c.status == "STM" and not self._tier1_stm(c)]
         hit = self._select(z, tier2)
         if hit is not None:
             concept, detail = hit
@@ -532,6 +582,37 @@ class ConceptStore:
             margin=float("nan"),
             via=None,
             fallback=False,
+        )
+
+    def _tier1_stm(self, concept: Concept) -> bool:
+        """May this STM candidate compete in tier 1 (FR-3.3 + cohesion gate)?
+
+        FR-3.3 maturity (`match_count >= n_mature`) AND cohesion >=
+        `min_cohesion` — the same FR-7 criterion-2 statistic and the same §8
+        key promotion uses, so a candidate too incoherent to ever be promoted
+        is also too incoherent to answer for a class at tier 1.
+
+        The cohesion conjunct is the 2026-07-11 owner ruling on the golden
+        gate's clause-5 red (docs/CHANGES.md). Without it, a candidate seeded
+        from one known class's tau-tail reject goes on to absorb the tau-tail
+        rejects of MANY classes; FR-5.1 then calibrates tau at the 95th
+        percentile of that heterogeneous ref_set's own LOO scores, handing it a
+        tau several times looser than any well-calibrated concept's. Its
+        (tau - s)/|tau| margin therefore outbids the correct LTM concept and it
+        starts winning tier-1 traffic — while being unpromotable (cohesion),
+        unfoldable (FR-8.2 needs some LTM to accept its mixed centroid; none
+        does) and beyond the reach of FR-6 residual clustering (mature
+        candidates have left the pool). It was measured doing exactly this on
+        the golden stream: cohesion 0.21, tau 3.4x the mean LTM tau, 47
+        known-class arrivals stolen in the final 84 steps.
+
+        Note this gates ROUTING only. Such a candidate keeps its identity, its
+        bookkeeping and its tier-2 traffic, and stays LRU-evictable — it is
+        demoted from answering, not deleted.
+        """
+        return (
+            concept.match_count >= self._config.n_mature
+            and concept.cohesion >= self._config.min_cohesion
         )
 
     def _assign(self, concept: Concept, z: np.ndarray, step: int) -> None:

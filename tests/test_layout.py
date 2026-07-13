@@ -53,6 +53,10 @@ REQUIRED_FILES = [
     "fpcmc/memory.py",
     # T10 — residual clustering (identity-preserving consolidation)
     "fpcmc/residual.py",
+    # T11 — stream runner, event log, replay + the frozen golden-run config
+    "fpcmc/stream.py",
+    "fpcmc/replay.py",
+    "configs/golden_run.yaml",
 ]
 
 

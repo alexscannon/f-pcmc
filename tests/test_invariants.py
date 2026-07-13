@@ -317,3 +317,41 @@ def test_no_global_threshold_in_decision_cascade():
         "fpcmc/scorers.py must not reference any prior/global threshold, found at lines: "
         + ", ".join(str(h.lineno) for h in scorer_hits)
     )
+
+
+# --------------------------------------------------------------- invariant 1
+# Single-pass (T11+): each stream index is processed exactly once — the event
+# log carries exactly one assign-or-seed record per step, in step order.
+
+
+def test_single_pass_invariant(tmp_path):
+    from fpcmc.config import FPCMCConfig, UmapConfig
+    from fpcmc.init import initialize_ltm
+    from fpcmc.replay import read_log
+    from fpcmc.stream import StreamRunner
+    from fpcmc.thresholds import compute_global_prior
+    from tests.fixtures.vmf_world import Segment, VMFWorld
+
+    world = VMFWorld(seed=911, k_known=3, k_novel=1, separation_deg=75.0)
+    schedule = [
+        Segment(counts={n: 40 for n in world.known_names}),
+        Segment(
+            counts={**{n: 25 for n in world.known_names}, "novel_00": 15},
+            distractors=tuple(range(10)),
+        ),
+    ]
+    stream = world.make_stream(schedule)
+    config = FPCMCConfig(
+        stm_capacity=6, n_mature=3, window_W=100, T_merge=100, T_cluster=100,
+        w_residual=50, umap=UmapConfig(dim=200), seed=42,
+    )
+    pool = world.t0_pool(n_per_class=50)
+    store = initialize_ltm(pool.x, pool.labels, config)
+    prior = compute_global_prior(store.ltm, config)
+    log_path = tmp_path / "run.jsonl"
+    StreamRunner(config, store, prior, log_path=log_path).run(stream.x)
+
+    steps = [r["step"] for r in read_log(log_path) if r["type"] in ("assign", "seed")]
+    assert steps == list(range(stream.x.shape[0])), (
+        "every stream index must be routed exactly once, in order"
+    )
