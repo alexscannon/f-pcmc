@@ -85,3 +85,37 @@ All counts match PRD §3 exactly (50,000 / 10,000 / 250 / 500 / 2,576 after spli
 - `ind.pt` covers only 10 of the 100 CIFAR-100 subclasses (partial synthetic generation, per `msproject_misc/MEMORY.md`), all under `fish`/`small_mammals` superclasses. P1's "Synthetic IND (250)" pool is real but not representative of all 100 classes — do not assume synthetic-IND coverage when building P2 phase schedules that reference synthetic IND by class.
 - `novel_superclasses.pt` covers 16 of the 9-novel-superclass-times-4(ish) design in the original README table (36 planned classes across 9 superclasses) vs. the 43-class/16-superclass actual — generation was partial/superset relative to the original plan (the README's "9 novel superclasses" figure is stale; treat the `.pt` file's actual `label_mappings` as ground truth over the README prose).
 - `evaluation/continual/{config.py,config.yaml,evaluation.py,main.py,stream.py}` have **uncommitted local changes** on top of HEAD `e723f028` (adding an opt-in `stream_order` ablation; default value `random` preserves prior behavior, confirmed by diff). The reproduction run backing `tests/reference_numbers.yaml` was executed against this working-tree state, not bare HEAD — the git blob hashes recorded in `tests/reference_numbers.yaml` are `git hash-object` content hashes (valid even though uncommitted), not commit hashes, for exactly this reason.
+
+## 7. Byte-identity pins and the v1 P1 stream (added 2026-07-13, owner-directed)
+
+### 7.1 The four `.pt` files are now hash-pinned
+
+Everything pinned in this project is silently conditional on these exact bytes: `tests/reference_numbers.yaml` came from a seed-42 run against them, as did the T6 M1 gate and the T14 v1 regression pin. `test_real_pool_schemas` now asserts these sha256s before it checks anything derived from them.
+
+| file | sha256 | rows |
+|---|---|---|
+| `real_cifar100.pt` | `dd78fe2321995a8880b7e60acae5c5725942c17a1d521d9db00b473aca0f9fde` | 50,000 train + 10,000 test |
+| `ind.pt` | `6ea73944da4ad8559210edeb9cbdad4db99562f945b33cf350041d473029a3ae` | 250 |
+| `novel_subclasses.pt` | `ef545ed7ef53c4e590e2c6cc16d74c043fe0bd921b4fc37809dfe4863c284ee1` | 500 |
+| `novel_superclasses.pt` | `6ea4bbf1a297601dd4ab4e495e979e1169e4396b70faf9742f7e86e2b0cedaa7` | 2,576 |
+
+**Why this matters beyond schema drift.** The v1 P1 stream's pool counts (250 / 500 / 2,576) are **derived from these files' row counts, not asserted anywhere in the source**, and the source project's own design documents a fuller extraction (5,000 synthetic IND / 600 near / 3,600 far — see §6, and the source's `CLAUDE.md`). These files are a **partial extraction**. That is self-consistent and fine — the entire project, including every pinned number, is built on them — but a completed re-extraction would change the pools, the stream ordering, and every pinned metric **silently**. If a hash assertion ever fails: **do not re-pin it.** Re-derive `tests/reference_numbers.yaml` from the new files first. This is the CLAUDE.md stop condition "a real-data schema check fails".
+
+### 7.2 The v1 P1 stream ordering is exactly reproducible, and archived
+
+Investigated in the source project at pinned commit `e723f028` (read-only). The ordering **is** deterministic at seed 42 — `build_stream` (`stream.py:35-69`, blob `55af9878bd6ffb57fd6de9dfcd3ca9d3b80c24d9`; pools assembled by `load_all_data`, `data_loader.py:56-152`, blob `0860808ea1e84208c141fb5d1ec3d81811fb63c1`; sole call site `main.py:353`) constructs a fresh `np.random.default_rng(seed)` (PCG64, not legacy `RandomState`, not Python `random`, not torch) from `config.random_seed`, threaded as a parameter rather than read from a global, seeded once and called once. No unseeded shuffle, no `glob`/`listdir`, no set/dict iteration feeding the ordering. Confirmed empirically: identical content hash across three fresh processes at `PYTHONHASHSEED` 0, 1 and 12345.
+
+Algorithm, in order: pools appended in fixed order (IND_REAL rows where `source == "cifar100_test"`, ascending; then IND_SYNTHETIC; NEAR_OOD; FAR_OOD) → `rng.permutation(10000)` over the 10,000-row `cifar100_test` pool, first 1,000 = warmup, remaining 9,000 = leftover → the 9,000 concatenated with the other three pools (12,326 total) → **one** `rng.permutation(12326)` over that concatenation → `warmup + shuffled_remainder` = 13,326. So the warmup is a 1,000/9,000 split of a single pool and is **disjoint** from the interleave; the four pools are concatenated then shuffled once, **not** shuffled per-pool and merged. Only `ind_warmup_count: 1000` is a config constant; the rest are derived (see §7.1).
+
+`StreamItem` carries `embedding`, `true_class` (str), `true_superclass` (str), `novelty_type` — **no integer label id and no within-pool index**. Join on `true_class` strings; the per-file integer label ids never enter the stream.
+
+**Archived (durable), because index-level equality is assertable and T12 will need it:**
+
+```
+/home/alex/data/evaluation/v1_p1_stream/stream_seed42_e723f028.npz
+sha256 77783853e826fbe52a2c4864ef49d3c10132311ad96a57b4a1c8e1d49834b73f
+```
+
+Length 13,326. Keys: `pool`, `within_pool_index`, `true_class`, `true_superclass`, `phase`, `seed`, `ind_warmup_count`, `commit`. Verified on archive: counts `ind_real` 10,000 / `far_ood` 2,576 / `near_ood` 500 / `ind_synthetic` 250; first 1,000 steps all `ind_real`; `t=0` → `ind_real[8132]` "fox", `t=1` → `ind_real[8268]` "telephone", `t=2` → `ind_real[719]` "pear". For `ind_real`, `within_pool_index` indexes the 10,000-row `cifar100_test` subset in ascending row order.
+
+**T12 consequence:** `test_p1_matches_v1` takes the **index-level equality** branch of its either/or, not the distributional fallback. Gate it on §7.1's hashes — an index-level test fails loudly if the embeddings are ever regenerated, whereas a distributional test would keep passing against a stream that had silently changed. That is an argument *for* the strict assertion.
