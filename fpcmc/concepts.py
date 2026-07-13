@@ -585,35 +585,37 @@ class ConceptStore:
         )
 
     def _tier1_stm(self, concept: Concept) -> bool:
-        """May this STM candidate compete in tier 1 (FR-3.3 + cohesion gate)?
+        """May this STM candidate compete in tier 1? FR-3.3 maturity, and only
+        that — `match_count >= n_mature`. This is the FR-9 cascade as specified.
 
-        FR-3.3 maturity (`match_count >= n_mature`) AND cohesion >=
-        `min_cohesion` — the same FR-7 criterion-2 statistic and the same §8
-        key promotion uses, so a candidate too incoherent to ever be promoted
-        is also too incoherent to answer for a class at tier 1.
+        HISTORY, because it is easy to "helpfully" re-add the thing that was
+        removed here (2026-07-13 owner ruling; docs/CHANGES.md). T11 briefly
+        ALSO required `cohesion >= min_cohesion`, to stop a "black hole": a
+        candidate that absorbs the tau-tail rejects of many classes earns a tau
+        several times looser than any well-calibrated concept's, and since the
+        FR-4.3 margin is (tau - s)/|tau| a loose tau RAISES its margin for every
+        query, so it outbids the correct LTM concept and captures its traffic.
 
-        The cohesion conjunct is the 2026-07-11 owner ruling on the golden
-        gate's clause-5 red (docs/CHANGES.md). Without it, a candidate seeded
-        from one known class's tau-tail reject goes on to absorb the tau-tail
-        rejects of MANY classes; FR-5.1 then calibrates tau at the 95th
-        percentile of that heterogeneous ref_set's own LOO scores, handing it a
-        tau several times looser than any well-calibrated concept's. Its
-        (tau - s)/|tau| margin therefore outbids the correct LTM concept and it
-        starts winning tier-1 traffic — while being unpromotable (cohesion),
-        unfoldable (FR-8.2 needs some LTM to accept its mixed centroid; none
-        does) and beyond the reach of FR-6 residual clustering (mature
-        candidates have left the pool). It was measured doing exactly this on
-        the golden stream: cohesion 0.21, tau 3.4x the mean LTM tau, 47
-        known-class arrivals stolen in the final 84 steps.
+        That gate was the right diagnosis of the wrong layer. The black hole was
+        a SYMPTOM of the unguarded merge paths (FR-6 residual + FR-8.2 folds),
+        which minted the incoherent ref_set in the first place. With both merge
+        guards in place it never forms, and the full suite — golden gate
+        included — passes without any cohesion conjunct here. Meanwhile the
+        conjunct would have been actively harmful on real data: measured on the
+        real pools, genuine single-class concepts span cohesion 0.165-0.708
+        while mixed multi-class blobs reach 0.541, so the two populations
+        OVERLAP and no global threshold separates them. At the PRD default 0.55,
+        96 of 100 genuine CIFAR classes would fail — i.e. this gate would have
+        excluded almost every legitimate candidate from tier 1 on P1/P2, a
+        failure no synthetic test could ever surface (fixture classes sit at
+        ~0.81).
 
-        Note this gates ROUTING only. Such a candidate keeps its identity, its
-        bookkeeping and its tier-2 traffic, and stays LRU-evictable — it is
-        demoted from answering, not deleted.
+        So: do not gate routing on cohesion. Fix contamination where it enters
+        (the merge guards in fpcmc/memory.py), not where it shows up. Cohesion
+        remains an FR-7 promotion criterion, where the PRD puts it — and its
+        real-data calibration is a live open question there.
         """
-        return (
-            concept.match_count >= self._config.n_mature
-            and concept.cohesion >= self._config.min_cohesion
-        )
+        return concept.match_count >= self._config.n_mature
 
     def _assign(self, concept: Concept, z: np.ndarray, step: int) -> None:
         """Absorb an assigned embedding, then the FR-5.1 lazy threshold check.

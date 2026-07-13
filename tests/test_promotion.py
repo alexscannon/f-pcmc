@@ -15,10 +15,13 @@ Owner-approved T8 semantics (Q&A 2026-07-11, recorded in docs/CHANGES.md T8):
     the concept — None at runtime; purity None, filled by T13).
 
 The unit-test world: 4 known + 3 novel + 1 burst class, exactly orthogonal
-(separation_deg=90) at kappa 150/150/500 in D=32. Single-class candidates
-cohere at ~0.81 mean pairwise cosine similarity, two-lobe candidates at ~0.40
-(vs min_cohesion=0.55), and novel-class centroids are rejected by every LTM
-concept while a known-class clone's centroid is accepted by its LTM twin.
+(separation_deg=90) at kappa 150/150/500 in D=32. Single-class candidates cohere
+at ~0.81 mean pairwise cosine similarity; an m-lobe blob of orthogonal classes
+coheres at ~0.81/m. The FR-7 cohesion bar is RELATIVE since 2026-07-13
+(min_cohesion_ratio 0.35 x the median cohesion of the T0 LTM concepts, ~0.81
+here => ~0.284), so the four-lobe blocking candidate (~0.20) fails it with room
+to spare. Novel-class centroids are rejected by every LTM concept, while a
+known-class clone's centroid is accepted by its LTM twin.
 
 test_outlier_burst_never_promotes runs the frozen golden stream (T1) through
 2,000 steps with stm_capacity=10 (the golden-run config must use <= ~25 so
@@ -112,11 +115,28 @@ def test_each_criterion_blocks(criterion):
             match_count=config.theta_promote - 1, windows={0, 1, 2},
         )
     elif criterion == "cohesion":
-        # Two-lobe candidate: halves from two orthogonal novel classes —
-        # mean pairwise cos-sim ~0.40 < min_cohesion=0.55.
+        # Four-lobe candidate: quarters from four mutually orthogonal non-known
+        # classes. An m-lobe blob of orthogonal classes coheres at ~within/m, so
+        # this lands at ~0.20 against a bar of ~0.284 — a ~29% margin.
+        #
+        # Was a TWO-lobe candidate under the retired absolute `min_cohesion=0.55`
+        # (2026-07-13: FR-7 criterion 2 became RELATIVE — min_cohesion_ratio 0.35
+        # x the median cohesion of the T0 LTM concepts, ~0.81 here). Two lobes
+        # cohere at ~0.40 and now CLEAR the bar, so the fixture — not the
+        # assertion — had to move. Three lobes (~0.26) would fail by only 7%,
+        # too thin to trust. Four lobes is both robust and the truer shape of what
+        # this criterion exists to catch: the real blob is MANY classes with few
+        # members each. A clean 2-class blob can only arise from a cross-class
+        # merge, which the FR-6/FR-8.2 merge guards now prevent outright.
+        #
+        # Every other criterion still passes (size 40 >= 30; 3 windows; a centroid
+        # averaged over four orthogonal non-known directions is rejected by every
+        # LTM), so a promotion here would be a cohesion failure and nothing else.
         x = np.vstack([
-            world.sample_class("novel_00", 20, stream="t8/blocks/cohesion"),
-            world.sample_class("novel_01", 20, stream="t8/blocks/cohesion"),
+            world.sample_class("novel_00", 10, stream="t8/blocks/cohesion"),
+            world.sample_class("novel_01", 10, stream="t8/blocks/cohesion"),
+            world.sample_class("novel_02", 10, stream="t8/blocks/cohesion"),
+            world.sample_class("burst_00", 10, stream="t8/blocks/cohesion"),
         ])
         cand = _candidate(x, "stm_0000", config, prior, match_count=40, windows={0, 1, 2})
     elif criterion == "separation":
@@ -190,7 +210,9 @@ def test_promotion_happy_path():
     assert rec.concept_id == "stm_0000"
     assert rec.size == 35 == decisions[0].size
     assert rec.cohesion == decisions[0].cohesion == cohesion(cand.ref_set)
-    assert rec.cohesion >= config.min_cohesion
+    # FR-7 criterion 2 is RELATIVE (amended 2026-07-13): the bar is
+    # min_cohesion_ratio x median cohesion of the T0 LTM concepts, not a constant.
+    assert rec.cohesion >= evaluator.cohesion_bar(store)
     assert rec.separation_margin == decisions[0].separation_margin
     assert rec.separation_margin > 0.0
     assert rec.window_count == 3 == decisions[0].window_count

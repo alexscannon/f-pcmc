@@ -28,7 +28,7 @@ PRD_S8_DEFAULTS = {
     "stm_capacity": 100,
     "n_mature": 5,
     "theta_promote": 30,
-    "min_cohesion": 0.55,
+    "min_cohesion_ratio": 0.35,
     "sep_factor": 1.0,
     "m_windows": 3,
     "window_W": 250,

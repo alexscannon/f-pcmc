@@ -13,7 +13,12 @@ short-circuited, so a decision always names every failing criterion):
                  decision 2 — the seeding embedding never counts).
   2. cohesion:   mean pairwise cosine similarity within ref_set over DISTINCT
                  pairs (self-similarities excluded — they are identically 1
-                 and would dilute the statistic) >= min_cohesion.
+                 and would dilute the statistic), >= a RELATIVE bar:
+                 min_cohesion_ratio x median(cohesion of the T0 LTM concepts).
+                 See `PromotionEvaluator.cohesion_bar` — cohesion has no
+                 encoder-independent scale, so the absolute `min_cohesion` this
+                 replaces was unusable on real data (PRD FR-7, amended
+                 2026-07-13).
   3. separation: the candidate's centroid would itself be rejected by every
                  LTM concept (see decision 13 below).
   4. recurrence: matches span >= m_windows distinct window_W windows
@@ -232,13 +237,45 @@ class PromotionEvaluator:
 
     # -------------------------------------------------------------- evaluation
 
+    def cohesion_bar(self, store: ConceptStore) -> float:
+        """FR-7 criterion 2's bar: `min_cohesion_ratio` x the median cohesion of
+        the T0 LTM concepts (PRD FR-7, amended 2026-07-13).
+
+        RELATIVE, not absolute, because cohesion has no encoder-independent
+        scale. On the real DINOv3 pools genuine single-class concepts span
+        0.165-0.708 (CIFAR class tightness varies ~4x) while mixed blobs reach
+        0.541 — the populations overlap, so no constant separates one class from
+        several, and the old absolute default (0.55) rejected 96 of 100 genuine
+        classes. Measured against the median of the T0 concepts instead, every
+        genuine class sits at >= 0.509x and every many-class blob at <= 0.372x,
+        so the 0.45 default separates them with margin at both ends — and it
+        re-derives itself if the encoder changes.
+
+        Reference population = `provenance="initial"` concepts only. FR-2.1
+        guarantees those are one-per-known-class, so they are the definition of
+        "what a genuine single-class concept looks like on this encoder", and no
+        promotion — good or bad — can move the bar. Median, not mean, so a single
+        odd class cannot drag it. Falls back to all LTM if there are no initial
+        concepts (a store built without a T0 init), and to 0.0 (criterion vacuous)
+        if there is no LTM at all — the same "nothing to compare against"
+        convention `_separation_margin` uses when it returns +inf.
+        """
+        ref = [c for c in store.ltm if c.provenance == "initial"] or store.ltm
+        if not ref:
+            return 0.0
+        return float(self._config.min_cohesion_ratio * np.median([c.cohesion for c in ref]))
+
     def _evaluate_one(self, concept: Concept, store: ConceptStore, step: int) -> PromotionDecision:
         config = self._config
-        coh = cohesion(concept.ref_set)
+        # `Concept.cohesion` is the cached form of the same `cohesion()` below —
+        # identical value, recomputed only when the ref_set actually changes.
+        # FR-7 is now its ONLY consumer (routing stopped gating on cohesion,
+        # 2026-07-13; see ConceptStore._tier1_stm).
+        coh = concept.cohesion
         sep = self._separation_margin(concept.centroid, store.ltm)
         checks = (
             ("size", concept.match_count >= config.theta_promote),
-            ("cohesion", coh >= config.min_cohesion),
+            ("cohesion", coh >= self.cohesion_bar(store)),
             ("separation", sep > 0.0),
             ("recurrence", len(concept.match_windows) >= config.m_windows),
         )

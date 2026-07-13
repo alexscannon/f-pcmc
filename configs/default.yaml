@@ -11,7 +11,10 @@ K_max_refset: 64
 stm_capacity: 100               # sweep {50, 100, 200}
 n_mature: 5
 theta_promote: 30               # sweep {20, 30, 50}
-min_cohesion: 0.55              # sweep {0.45, 0.55, 0.65}
+min_cohesion_ratio: 0.35        # sweep {0.30, 0.35, 0.40}; FR-7 criterion 2 is
+                                # RELATIVE to median(cohesion of T0 LTM concepts).
+                                # Replaces the retired absolute `min_cohesion: 0.55`
+                                # — different meaning, so never reuse that number.
 sep_factor: 1.0
 m_windows: 3
 window_W: 250

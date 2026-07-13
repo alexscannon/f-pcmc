@@ -11,6 +11,8 @@ test_real_pool_schemas [I] — the five real pools: expected counts
                            wording — see data/README.md).
 """
 
+import hashlib
+
 import numpy as np
 import pytest
 import torch
@@ -84,12 +86,59 @@ _EXPECTED = {
     "far_ood": (2_576, 43, 16, "genai_novel_superclass"),
 }
 
+# sha256 of the four source .pt files (2026-07-13, owner-directed).
+#
+# WHY THIS PIN EXISTS. Every pinned number in this project is silently
+# conditional on these exact bytes: tests/reference_numbers.yaml came from a
+# seed-42 run against them, and so did the T6 M1 gate and the T14 v1 regression
+# pin. The v1 P1 stream is worse than that — its pool counts (250 / 500 / 2,576)
+# are DERIVED from these files' row counts, not asserted anywhere, and the
+# source project's own design documents a fuller extraction (5,000 / 600 /
+# 3,600). These files are a PARTIAL extraction. That is fine and self-consistent
+# — the whole project is built on them — but it means a re-extraction would
+# silently change the pools, the stream ordering, and every pinned metric, with
+# nothing to catch it.
+#
+# So: pin the bytes. If these hashes ever fail, DO NOT re-pin them to make the
+# test pass. A hash change means the embeddings were regenerated, and every
+# pinned number in tests/reference_numbers.yaml must be re-derived from the new
+# files before anything else is trusted. Stop and report (CLAUDE.md stop
+# condition: "a real-data schema check fails").
+_EXPECTED_SHA256 = {
+    "real_cifar100.pt": "dd78fe2321995a8880b7e60acae5c5725942c17a1d521d9db00b473aca0f9fde",
+    "ind.pt": "6ea73944da4ad8559210edeb9cbdad4db99562f945b33cf350041d473029a3ae",
+    "novel_subclasses.pt": "ef545ed7ef53c4e590e2c6cc16d74c043fe0bd921b4fc37809dfe4863c284ee1",
+    "novel_superclasses.pt": "6ea4bbf1a297601dd4ab4e495e979e1169e4396b70faf9742f7e86e2b0cedaa7",
+}
+
+
+def _sha256(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
 
 @pytest.mark.slow
 def test_real_pool_schemas():
     available, reason = data.embeddings_available()
     if not available:
         pytest.skip(reason)
+
+    # Byte-identity of the source files, before anything derived from them is
+    # checked (see _EXPECTED_SHA256 — a mismatch invalidates every pinned
+    # number, so it must fail loudly rather than be re-pinned).
+    root = data.resolve_embeddings_dir()
+    for filename, expected in _EXPECTED_SHA256.items():
+        actual = _sha256(root / filename)
+        assert actual == expected, (
+            f"{filename} has changed on disk (sha256 {actual[:16]}… != pinned "
+            f"{expected[:16]}…). The embeddings were regenerated. Every pinned "
+            f"number in tests/reference_numbers.yaml (T6 M1 gate, T14 v1 pin) "
+            f"and the v1 P1 stream ordering derive from these exact bytes — "
+            f"re-derive them, do NOT re-pin this hash."
+        )
 
     pools = data.load_all_pools()
     assert set(pools) == set(_EXPECTED)
