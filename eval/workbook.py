@@ -513,6 +513,8 @@ def _jsonable(obj):
         return {str(k): _jsonable(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_jsonable(v) for v in obj]
+    if isinstance(obj, (bool, np.bool_)):  # before int: bool subclasses int
+        return bool(obj)
     if isinstance(obj, (np.floating, float)):
         f = float(obj)
         return f if math.isfinite(f) else None
