@@ -627,7 +627,14 @@ class ConceptStore:
         (the merge guards in fpcmc/memory.py), not where it shows up. Cohesion
         remains an FR-7 promotion criterion, where the PRD puts it — and its
         real-data calibration is a live open question there.
+
+        A2 ablation (`config.ablation.no_stm`, PRD §7.4; owner-approved
+        semantics 2026-07-13): the maturity gate is one of the STM filtering
+        mechanisms A2 removes, so every candidate is tier-1-eligible from
+        birth. This is the sanctioned ablation switch, not a new conjunct.
         """
+        if self._config.ablation.no_stm:
+            return True
         return concept.match_count >= self._config.n_mature
 
     def _assign(self, concept: Concept, z: np.ndarray, step: int) -> None:
@@ -677,7 +684,12 @@ class ConceptStore:
         above capacity converges back under Δ. Only the live STM view is
         eligible — LTM is exempt regardless of staleness, mature-but-
         unpromoted candidates are not.
+
+        A2 ablation (`config.ablation.no_stm`): capacity/LRU eviction is STM
+        management and is switched off — candidates are never evicted.
         """
+        if self._config.ablation.no_stm:
+            return
         stm = self.stm
         while stm and len(stm) >= self._config.stm_capacity:
             victim = min(stm, key=lambda c: (c.last_matched_at, c.created_at, c.concept_id))

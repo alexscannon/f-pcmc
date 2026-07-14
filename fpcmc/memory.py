@@ -273,12 +273,19 @@ class PromotionEvaluator:
         # 2026-07-13; see ConceptStore._tier1_stm).
         coh = concept.cohesion
         sep = self._separation_margin(concept.centroid, store.ltm)
-        checks = (
-            ("size", concept.match_count >= config.theta_promote),
-            ("cohesion", coh >= self.cohesion_bar(store)),
-            ("separation", sep > 0.0),
-            ("recurrence", len(concept.match_windows) >= config.m_windows),
-        )
+        # T15 ablations gate which criteria BIND; the statistics above are
+        # always computed so the decision record stays complete. A2 no_stm:
+        # "direct promotion at theta matches" — size alone (PRD §7.4;
+        # owner-approved semantics 2026-07-13). A3 no_recurrence: FR-7
+        # criterion 4 dropped, the other three unchanged.
+        checks = (("size", concept.match_count >= config.theta_promote),)
+        if not config.ablation.no_stm:
+            checks += (
+                ("cohesion", coh >= self.cohesion_bar(store)),
+                ("separation", sep > 0.0),
+            )
+            if not config.ablation.no_recurrence:
+                checks += (("recurrence", len(concept.match_windows) >= config.m_windows),)
         failed = tuple(name for name, ok in checks if not ok)
         decision = PromotionDecision(
             concept_id=concept.concept_id,

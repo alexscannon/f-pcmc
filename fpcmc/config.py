@@ -38,6 +38,35 @@ class HdbscanConfig:
 
 
 @dataclass(frozen=True)
+class AblationConfig:
+    """PRD §7.4 A1–A4 mechanism switches (T15; owner-approved 2026-07-13).
+
+    All default False — the full F-PCMC system. Exactly one flag is set per
+    ablation config under configs/. A5 (single sub-scorer) and A6 (encoder)
+    need no flags here: they reuse the existing `scorer`/`encoder` keys.
+
+    global_tau:    A1 — every concept's (tau, tau_vmf) is pinned to the frozen
+                   FR-5.3 GlobalPrior pair; no LOO percentiles, no shrinkage,
+                   no promotion recompute (fpcmc/thresholds.py holds the
+                   prior). Isolates FR-5.
+    no_stm:        A2 — all STM management off: no maturity gate (every
+                   candidate is tier-1-eligible from birth), no capacity/LRU
+                   eviction, no FR-6 residual pool, and promotion is
+                   size >= theta alone. Isolates outlier filtering.
+    no_recurrence: A3 — FR-7 criterion 4 (m_windows recurrence) dropped;
+                   the other three criteria unchanged.
+    no_merge:      A4 — every merge pathway off: the periodic FR-8 sweep, the
+                   on-promotion check, and FR-6 residual consolidation (whose
+                   only action is merging). Isolates FR-8 / fragmentation.
+    """
+
+    global_tau: bool = False
+    no_stm: bool = False
+    no_recurrence: bool = False
+    no_merge: bool = False
+
+
+@dataclass(frozen=True)
 class FPCMCConfig:
     """PRD §8 parameters, PRD defaults. Field order follows the PRD block."""
 
@@ -66,6 +95,10 @@ class FPCMCConfig:
     merge_sim: float = 0.80
     umap: UmapConfig = field(default_factory=UmapConfig)
     hdbscan: HdbscanConfig = field(default_factory=HdbscanConfig)
+    # T15 addition beyond the PRD §8 block (TASKS T15 "config-driven ablation
+    # switches"; owner-approved nested-block shape, 2026-07-13). Absent from
+    # configs/default.yaml deliberately — the block absent means all-off.
+    ablation: AblationConfig = field(default_factory=AblationConfig)
     seed: int = 42
 
     def __post_init__(self) -> None:
@@ -91,7 +124,7 @@ class FPCMCConfig:
         return yaml.safe_dump(_as_plain_dict(self), sort_keys=False)
 
 
-_NESTED = {"umap": UmapConfig, "hdbscan": HdbscanConfig}
+_NESTED = {"umap": UmapConfig, "hdbscan": HdbscanConfig, "ablation": AblationConfig}
 
 
 def _build(cls: type, data: dict[str, Any], context: str):
@@ -113,6 +146,10 @@ def _build(cls: type, data: dict[str, Any], context: str):
 
 def _coerce(value: Any, annotation: Any, where: str) -> Any:
     ann = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", str(annotation))
+    if ann == "bool":
+        if not isinstance(value, bool):
+            raise ConfigError(f"{where} must be a boolean, got {value!r}")
+        return value
     if ann == "int":
         if isinstance(value, bool) or not isinstance(value, int):
             raise ConfigError(f"{where} must be an int, got {value!r}")
