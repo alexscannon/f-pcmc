@@ -139,11 +139,22 @@ def _pretrain_model_file(config) -> Path:
 
 
 def _run_eval(model, stream, task: int, step: int, out_dir: Path) -> dict:
-    """Their eval (supervise -> classify -> cluster) + the Q3 auxiliary
-    synthetic-inclusive clustering, persisted as one checkpoint record."""
+    """Their eval + the Q3 auxiliary synthetic-inclusive clustering,
+    persisted as one checkpoint record.
+
+    Driver-side composition of exactly the calls their PCMC.eval makes
+    (vendor pcmc.py:271-290: supervise -> classify -> cluster -> plots),
+    with ONE difference (Phase 3 owner decision Q6, PLAN.md): cluster()
+    receives the clust_size-per-class subset loader instead of the full
+    test loader — their O(N^2) python-level jaccard makes full-size
+    clustering cost ~2.9 h per run. supervise/classify keep the full
+    SUP_SIZE/TEST_SIZE sets; the vendored functions are untouched."""
     t_start = time.perf_counter()
     sup, evl = stream.eval_loaders(task)
-    class_acc, class_pc, clust_acc, clust_pc = model.eval(sup, evl, task, step)
+    model.supervise(sup, task, step)
+    class_acc, class_pc = model.classify(evl, task, step)
+    clust_acc, clust_pc = model.cluster(stream.clust_loader(task), task, step)
+    model.plots(task, step)
     record = {
         "step": step,
         "task": task,

@@ -117,8 +117,10 @@ def build_run_config(
             "sup_size": 4 if smoke else SUP_SIZE,
             "test_size": 4 if smoke else TEST_SIZE,
             # Q6: clustering subsample (strict subset of the test set; the
-            # smoke value 2 < 4 exercises the subsampling path end-to-end).
-            "clust_size": 2 if smoke else CLUST_SIZE,
+            # smoke value 3 < 4 exercises the subsampling path end-to-end).
+            # Must stay > 2 in any config: their SpectralClustering demands
+            # n_clusters (= 2 x classes) < n_samples (= clust_size x classes).
+            "clust_size": 3 if smoke else CLUST_SIZE,
         },
         "model": {
             "name": "pcmc",

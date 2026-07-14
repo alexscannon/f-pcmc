@@ -206,6 +206,21 @@ def test_run_config_smoke_budget():
         < smoke["max_stream_steps"]
 
 
+def test_run_config_clust_size():
+    """Q6 (Phase 3 owner decision, PLAN.md): the clustering eval subsample —
+    a strict subset of the test set, pinned at 25/class, and always > 2:
+    their SpectralClustering requires n_clusters (= 2 x classes) <
+    n_samples (= clust_size x classes)."""
+    from baselines.pcmc_sleep.run_config import CLUST_SIZE, RHO
+
+    cfg = build_run_config("resnet18", 42)
+    assert cfg["dataset"]["clust_size"] == CLUST_SIZE == 25
+    assert 2 < cfg["dataset"]["clust_size"] <= cfg["dataset"]["test_size"]
+    assert cfg["model"]["layers"]["layer0"]["rho"] == RHO
+    smoke = build_run_config("resnet18", 42, smoke=True)
+    assert 2 < smoke["dataset"]["clust_size"] < smoke["dataset"]["test_size"]
+
+
 def test_run_config_rejects_off_matrix_cells():
     with pytest.raises(ValueError):
         build_run_config("resnet34", 42)

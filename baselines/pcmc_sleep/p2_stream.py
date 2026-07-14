@@ -74,6 +74,9 @@ class P2UPLStream:
         self.std = list(config.dataset.std)
         self.sup_size = int(config.dataset.sup_size)
         self.test_size = int(config.dataset.test_size)
+        # Q6 (Phase 3 owner decision, PLAN.md): the O(N^2) clustering eval
+        # runs on a per-class subsample — see run_config.CLUST_SIZE.
+        self.clust_size = int(config.dataset.clust_size)
 
         self.phases = mirror.phases
         self.task_index = phase_task_index(self.phases)
@@ -163,11 +166,15 @@ class P2UPLStream:
         )
 
     def _cifar_eval_items(self, task: int):
-        """(sup_items, sup_labels, test_items, test_labels) for the CIFAR
-        classes visible at ``task``, in label order (labels contiguous —
-        load-bearing for their supervise/classify indexing)."""
+        """(sup_items, sup_labels, test_items, test_labels, clust_items,
+        clust_labels) for the CIFAR classes visible at ``task``, in label
+        order (labels contiguous — load-bearing for their supervise/classify
+        indexing). The clustering items are each class's PREFIX of its
+        selected test rows (Q6: run_config.CLUST_SIZE recipe, reproduced
+        CPU-side by fpcmc_scorer.cifar_eval_rows — keep them in lockstep)."""
         cifar, _ = eval_classes_at(self.mirror.t0_classes, self.phases, task)
         sup_items, sup_labels, test_items, test_labels = [], [], [], []
+        clust_items, clust_labels = [], []
         for cls in cifar:
             label = self.eval_map[cls]
             train_rows = self.mirror.cifar_rows("train", cls)
@@ -187,24 +194,39 @@ class P2UPLStream:
                 test_rows = test_rows[pick]
             test_items += [("cifar", "test", int(r)) for r in test_rows]
             test_labels += [label] * len(test_rows)
-        return sup_items, sup_labels, test_items, test_labels
+            clust_items += [
+                ("cifar", "test", int(r)) for r in test_rows[: self.clust_size]
+            ]
+            clust_labels += [label] * len(test_rows[: self.clust_size])
+        return (sup_items, sup_labels, test_items, test_labels,
+                clust_items, clust_labels)
 
     def eval_loaders(self, task: int):
-        sup_items, sup_labels, test_items, test_labels = self._cifar_eval_items(task)
+        sup_items, sup_labels, test_items, test_labels, _, _ = (
+            self._cifar_eval_items(task)
+        )
         return self._loader(sup_items, sup_labels), self._loader(test_items, test_labels)
 
+    def clust_loader(self, task: int):
+        """Q6: the CIFAR clustering eval set — the per-class clust_size
+        prefix of the test draw. The driver feeds this (not the full test
+        loader) to their cluster(); supervise/classify keep the full sets."""
+        *_, clust_items, clust_labels = self._cifar_eval_items(task)
+        return self._loader(clust_items, clust_labels)
+
     def cluster_loader(self, task: int):
-        """Q3: auxiliary synthetic-inclusive clustering set — the CIFAR test
-        set plus, per synthetic class visible at ``task``, its first
-        ``test_size`` stream arrivals (stream order; stream-seen by
-        definition). None while no synthetic class has been introduced."""
+        """Q3: auxiliary synthetic-inclusive clustering set — the Q6-sized
+        CIFAR clustering subset plus, per synthetic class visible at
+        ``task``, its first ``clust_size`` stream arrivals (stream order;
+        stream-seen by definition). None while no synthetic class has been
+        introduced."""
         _, synth = eval_classes_at(self.mirror.t0_classes, self.phases, task)
         if not synth:
             return None
-        _, _, items, labels = self._cifar_eval_items(task)
+        *_, items, labels = self._cifar_eval_items(task)
         true_class = self.mirror.manifest.true_class
         for cls in synth:
-            steps = np.flatnonzero(true_class == cls)[: self.test_size]
+            steps = np.flatnonzero(true_class == cls)[: self.clust_size]
             items += [("stream", int(s)) for s in steps]
             labels += [self.cluster_map[cls]] * len(steps)
         return self._loader(items, labels)
