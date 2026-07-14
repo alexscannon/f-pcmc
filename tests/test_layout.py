@@ -64,6 +64,13 @@ REQUIRED_FILES = [
     "eval/metrics.py",
     "eval/harness.py",
     "eval/figures.py",
+    # T14 — baselines: vendored v1 (+ shim/adapter), batch wrapper, oracle
+    "baselines/v1_stream.py",
+    "baselines/batch_knn_vmf.py",
+    "baselines/oracle.py",
+    "baselines/v1/main.py",
+    "baselines/v1/config.yaml",
+    "baselines/v1/paradigms/mahalanobis_hdbscan.py",
 ]
 
 

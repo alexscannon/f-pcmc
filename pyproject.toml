@@ -23,6 +23,12 @@ dependencies = [
     # (PRD §2.2) and torch.load is build-independent.
     "torch==2.11.0",
     "matplotlib==3.10.8",
+    # T14 baselines: the vendored v1 pipeline (baselines/v1/, byte-identical
+    # port) imports these at runtime. Pinned to the source project's uv.lock
+    # versions (evaluation/continual/uv.lock @ e723f028) like everything above.
+    "loguru==0.7.3",
+    "tqdm==4.66.5",
+    "pandas==3.0.2",
 ]
 
 [dependency-groups]
