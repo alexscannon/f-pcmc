@@ -177,6 +177,26 @@ All verified 2026-07-14 against `reference/pcmc` @ `e77f5f7ae8fa`:
   `cudnn.deterministic=True`) — replicate in the driver; GPU contrastive
   training is seeded-but-not-bitwise (accepted deviation, PLAN.md §Owner
   decisions).
+- **DataLoader deadlock, WILL hit production runs** (observed live,
+  2026-07-14): `Layer.pretrain` builds its loader with `num_workers>0` +
+  `persistent_workers=True`, then `init_memory` re-iterates it and BREAKS
+  after `len(trainloader) // init_epochs` batches (`pcmc_layer.py:341-343`
+  — ~1 epoch of a repeats-expanded loader, so at real epoch counts the
+  iterator is always abandoned early). Observed end state: worker processes
+  exited, main python blocked forever in `futex_do_wait` on the worker
+  queue, 0% CPU/GPU. Mitigation used in the Phase 0.3 spike (driver-side,
+  their files untouched): monkeypatch `torch.utils.data.DataLoader` to
+  force `num_workers=0` and strip `persistent_workers`/`prefetch_factor`
+  (see the scratchpad `pcmc_geometry_spike.py`). Decide in your plan (and
+  say so): same patch (slower, simple, proven) vs a scoped alternative —
+  and if you keep workers anywhere, prove the abandonment path with a
+  timeout in the smoke.
+- **The 3090 is SHARED**: the owner runs a llama.cpp server
+  (`llama-server`, port 9401) holding ~17.7 GB of the 24 GB. Budget PCMC
+  for the remaining ~6 GB (RN18 @ bs 256 fits; RN50 and/or 120px patches
+  may not) — check `nvidia-smi` before sizing batches, and raise GPU-memory
+  scheduling with the owner before the Phase 4 production runs rather than
+  assuming the card is free.
 
 ## 6. Environment / commands
 
