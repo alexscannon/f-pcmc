@@ -34,6 +34,37 @@ failing inside the F-PCMC machinery.
 4. **Branch**: `task/T17-sleep` (renamed from `tasks/T17-sleep` to match the
    CLAUDE.md convention).
 
+## Owner decisions (2026-07-14, Phase 2 Q&A — HANDOFF_PHASE2.md §8, verbatim)
+
+Asked pre-implementation as mandated; answers recorded exactly as given:
+
+- **Q1 (patch geometry)**: resolved pre-Q&A by the Phase 0.3 spike —
+  **their-120** (img 120, patch 60, stride 30). Not re-asked.
+- **Q2 (sleep schedule on P2)**: *"(b) Mid-phase per phase"* — one sleep at
+  each P2 phase's midpoint (11 sleeps/run); the driver steers their
+  `sleep_start`/`sleep_freq` attributes between steps (their trigger code
+  untouched) and the computed step list is recorded in the resolved config.
+- **Q3 (their eval sets on P2 novel classes)**: *"(a) CIFAR-only
+  classification"* — the classification protocol is restricted to the 100
+  CIFAR classes (T0 80 + held-out 20, test images from the canonical CIFAR
+  test split); synthetic near/far classes are covered via clustering purity
+  only, fed stream-seen rows (documented). Two facts recorded with the
+  decision: (i) their own released protocol draws SUPERVISE images from
+  streamed data (streams.py:97), so sup-from-stream is protocol-conformant;
+  (ii) **P2 streams the held-out classes' ind_test rows** (build_p2 gives
+  each held-out class ALL of its train+test rows) and consumes ~80% of the
+  T0 ind_test pool as interleave — so CIFAR test images may have been seen
+  UNLABELED in-stream. That matches released upstream behavior too
+  (streams.py sets `cls_inds_test = cls_inds_train` for most datasets); it
+  is documented, not silently absorbed.
+- **Q4 (mid-stream snapshot cadence)**: *"Phase-end (11/run)"* — model +
+  centroid memories at each phase end plus a final snapshot (the final one
+  also carries the example-patch memories); eval-metric JSONs at every
+  checkpoint regardless.
+- **Q5 (vendored-hash location)**: *"Append to lib/PROVENANCE.md"* — new
+  `## baselines/pcmc_sleep/vendor/` section (placed BEFORE the v1 section,
+  whose test parses from its own marker to end-of-file).
+
 ## Phase 0 findings (2026-07-14)
 
 - **0.1 Alignment: PROVEN, 0 mismatches over all 63,326 rows.** Every pool
@@ -101,6 +132,7 @@ failing inside the F-PCMC machinery.
 1. **P2 pixel mirror** (`stream_mirror.py`): image-space replay of the exact
    T12 `StreamManifest` per seed {42,43,44}; T0 = raw train images of the 80
    split classes. [U] tests: per-index identity with the embedding stream.
+   **DONE 2026-07-14** (commit `6c83412`): 4 [I] tests green on live data.
 2. **Driver**: vendor needed upl-benchmark modules byte-identical (blob
    hashes in `lib/PROVENANCE.md`, untouched-checksum test — T14/v1
    precedent; nothing imports `reference.*`), plus a non-verbatim shim:
@@ -108,6 +140,61 @@ failing inside the F-PCMC machinery.
    mapped to P2 phases (their sleep-middle default), checkpoint artifacts at
    the 44 P2 checkpoints, `--no-sleep` flag. Resolve the two paper/config
    discrepancies against a Table-2 reproduction smoke.
+   **DONE 2026-07-14.** As built:
+   - `vendor/` = the verified import closure of `PCMC` (12 files,
+     byte-identical from the pinned submodule commit's blobs; hashes in
+     `lib/PROVENANCE.md`, `test_pcmc_vendor_untouched` green). Verified
+     deviations from the HANDOFF §4.1 expectation: `sleep_algos.py` is empty
+     and imported by nothing (excluded); upstream has no
+     `core/stream/__init__.py` (namespace subpackage — none invented);
+     `core/stream/dataset.py` IS needed (`NumpyDataset`); `torchmetrics` is
+     an undocumented upstream import, pinned explicitly in the env.
+   - `env/` = own uv project (py 3.11, torch 2.5.1+cu121 + the Phase 0.2
+     recipe, versions pinned to the validated spike env; `uv.lock`
+     committed). Table-2 reproduction is NOT possible on this machine (no
+     ImageNet-40/Places365 raw data — HANDOFF §5); fidelity is established
+     by paper-conformant settings + byte-identical code instead.
+   - `run_config.py` (torch-free, CPU-unit-tested) resolves the paper-
+     faithful config: `pretrained=False`, both epoch knobs = 500, their-120
+     geometry, θ=30 Δ=400 α=0.1 β=0.99 M=30, CIFAR-100 mean/std, and
+     `feat_size` per arch — **512 RN18 / 2048 RN50** (their 512 default
+     would shape-crash resnet50's stm/ltm buffers).
+   - `p2_stream.py::P2UPLStream` satisfies exactly the upstream main.py
+     stream interface, fed from `P2PixelMirror`; labels are contiguous in
+     seen order (their supervise() indexes score columns by raw label).
+     Eval sets per owner Q3(a); supervise draws seeded per class via
+     `fpcmc.rng.make_rng`, checkpoint-independent.
+   - `driver.py` (GPU env) replaces main.py: set_seed replica; the proven
+     global DataLoader force-patch (num_workers=0, worker-only kwargs
+     stripped) — chosen over a scoped patch because a config-only fix is
+     impossible (persistent_workers with 0 workers raises) and the sleep
+     loaders share the abandonment-prone pattern; the smoke runs under a
+     hard subprocess timeout so a deadlock regression fails loudly. Sleep
+     steering per owner Q2 (sets `layer.sleep_start/sleep_freq` to the next
+     recorded phase-midpoint target; trigger code untouched; sentinel freq
+     blocks the python-modulo early-fire path). Their eval at every
+     checkpoint + the Q3 auxiliary synthetic-inclusive `model.cluster()`
+     call; phase-end snapshots per Q4; `resolved_config.yaml`/`summary.json`
+     resumability mirroring `run_matrix.run_cell`; `--no-sleep`, `--smoke`,
+     `--force`, and an OFF-by-default `--pretrain-cache` (their released
+     `load_pretrain` mechanism, driver-side file copy) for the Phase 4
+     shared-T0 decision.
+   - `launch.py` = thin CPU-side subprocess launcher + `gpu_env_available`.
+   - Tests: 11 CPU-fast (vendor checksum + run_config logic) + 1 [I][slow]
+     GPU smoke (tiny budget: 1,024 T0 images × 2 epochs, 240 wake steps,
+     forced sleep at 150, checkpoint eval at 200, resume check; 77 s wall on
+     the 3090, 88 s as a test). Smoke accuracies are near-random BY DESIGN
+     (2-epoch encoder) — the smoke validates plumbing, not performance.
+   - **Flagged for Phase 4 (not decided)**: at paper-faithful 500 epochs ×
+     40k T0 images ≈ 78k batches, T0 pretrain alone projects to ~30 GPU-h
+     per run from spike timings (in-process loading) — pretrain sharing per
+     (arch, seed) via `--pretrain-cache` (also arguably a cleaner controlled
+     comparison: sleep and no-sleep branch from the identical encoder) and
+     GPU scheduling need owner sign-off before the 12-run matrix. **Flagged
+     for Phase 3**: their clustering eval is O(N²) python-level Jaccard +
+     spectral clustering — full 100×100 test sets (10k images) × 44
+     checkpoints is infeasible; eval sizing must be decided there (the
+     driver reads `dataset.sup_size`/`test_size` from config).
 3. **Evaluation parity**: their Eq. 6–7 supervise/classify + clustering
    purity as an eval-side scorer applied to BOTH systems (F-PCMC concepts
    score patches?? No — F-PCMC is whole-image: its "centroids" for their
