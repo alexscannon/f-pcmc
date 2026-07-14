@@ -65,6 +65,57 @@ Asked pre-implementation as mandated; answers recorded exactly as given:
   `## baselines/pcmc_sleep/vendor/` section (placed BEFORE the v1 section,
   whose test parses from its own marker to end-of-file).
 
+## Owner decisions (2026-07-14, Phase 3 Q&A — HANDOFF_PHASE3.md §8, verbatim)
+
+Asked pre-implementation as mandated; answers recorded exactly as given
+(option labels as selected). Measured evidence presented with the questions:
+their exact `cluster()` hot path times at 1.11 µs/jaccard-pair (quadratic) +
+spectral ~N^1.8, so full 100/class clustering = 2.88 h/run (×12 ≈ 35 h,
+worst checkpoint 5.8 min ≈ 13,500-image final aux set); and on singleton
+(binary-affinity) sets their SpectralClustering does NOT agree with the
+analytic collapse (arbitrary merges when concepts > 2×classes: purity 43–54%
+vs 79–88%; arbitrary splits in F-PCMC's actual regime of concepts <
+2×classes: totals close but per-class purity off by up to 56pp, nan patterns
+disagree, seed-unstable).
+
+- **Q6 (eval sizing, gates Phase 4)**: *"25/class clustering (Recommended)"*
+  — classification stays 100 sup + 100 test/class at all 44 checkpoints;
+  clustering set = first 25 of each class's seeded test draw (CIFAR) / first
+  25 stream arrivals (synthetic). Measured 0.19 h/run, worst checkpoint 24 s.
+  One constant set in `run_config.py` (`CLUST_SIZE`), used byte-identically
+  by both systems.
+- **Q7 (F-PCMC centroid population)**: *"Both, tier-1 headline
+  (Recommended)"* — every checkpoint scored twice, tier-1 (LTM ∪ mature STM,
+  exactly `ConceptStore._tier1_stm`'s maturity-only view) and LTM-only; the
+  headline comparison uses tier-1 (the functional analog of their answering
+  memory `self.ltm`), LTM-only recorded alongside in each checkpoint JSON.
+  Centroid = `Concept.centroid` ((D,) L2-normalized; EMA for STM, frozen for
+  LTM). Context recorded with the decision: final checkpoint seed 42 has
+  fpcmc_default 84 LTM + 99 STM (4 promotions), a6_resnet50 80 LTM + 100 STM
+  (0 promotions) — LTM-only leaves novel classes structurally unrepresented.
+- **Q8 (checkpoint-state reconstruction)**: *"Additive replay iterator
+  (Recommended)"* — `fpcmc/replay.py` refactored additively (per-record
+  application extracted; a generator yields the store after init and after
+  each checkpoint record); `replay()` behavior byte-identical, T11 tests
+  untouched; every yielded state cross-checked against its checkpoint
+  record's `n_ltm`/`n_stm`/`taus`.
+- **Q9 (whole-image clustering)**: *"Analytic collapse (Recommended)"* —
+  cluster assignment = matched concept id; purity via their `purity_score`
+  math verbatim on that assignment. The degenerate binary affinity already
+  IS a partition; spectral on it was measured non-equivalent and
+  seed-unstable (numbers above). Slightly conservative for F-PCMC (≤ ~183
+  clusters vs the k = 2×classes ≈ 200 PCMC gets).
+- **Q10a (placement)**: *"baselines/pcmc_sleep/ (Recommended)"* — scorer +
+  CLI live beside the rest of the T17 protocol machinery.
+- **Q10b (adapter scope)**: *"Cheap artifacts only (Recommended)"* —
+  per-checkpoint LTM size, sleep step times, eval wall times,
+  phase-end-snapshot fields, read from the Phase 2 artifacts; no driver
+  changes; documented field-by-field as a lossy mapping.
+- **Q10c (output location)**: *"pcmc_sleep/paper_protocol/ (Recommended)"* —
+  `${DATA_ROOT}/evaluation/f_pcmc_runs/pcmc_sleep/paper_protocol/<system>/
+  p2_seed<N>/checkpoints/*.json`; scored cells fpcmc_default × {42,43,44} +
+  a6_resnet50 × {42,43,44}.
+
 ## Phase 0 findings (2026-07-14)
 
 - **0.1 Alignment: PROVEN, 0 mismatches over all 63,326 rows.** Every pool

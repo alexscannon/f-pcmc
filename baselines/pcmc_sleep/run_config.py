@@ -19,6 +19,12 @@ Owner decisions baked in (Phase 2 Q&A, 2026-07-14 — recorded in PLAN.md):
   Q4 snapshots: model + centroid memories at phase ends (11/run) + final.
   Q5 provenance: vendored hashes appended to lib/PROVENANCE.md.
 
+Phase 3 owner decision baked in (Q&A 2026-07-14, recorded in PLAN.md):
+  Q6 eval sizing: classification at SUP_SIZE/TEST_SIZE (100/100) at all 44
+     checkpoints; the O(N^2) clustering eval subsampled to CLUST_SIZE (25)
+     per class — see the CLUST_SIZE comment for the exact recipe and the
+     measured cost basis. Gates Phase 4: no matrix cell launches without it.
+
 Paper-faithful settings (HANDOFF_PHASE2.md §5/§7): ``pretrained=False`` (the
 released True silently SKIPS contrastive T0 training), both epoch knobs set
 to the same value (released code mismatches them: model 300 / layer 500;
@@ -52,6 +58,18 @@ SLEEP_EPOCHS = 300
 #: Their Eq. 6-7 protocol sizes: labeled (supervise) / test images per class.
 SUP_SIZE = 100
 TEST_SIZE = 100
+
+#: Phase 3 owner decision Q6 (2026-07-14, PLAN.md): the clustering eval runs
+#: on a per-class subsample — the first CLUST_SIZE items of each class's
+#: seeded test draw (CIFAR; with TEST_SIZE=100 the draw is all 100 canonical
+#: test rows, so this is the 25 lowest row indices per class) and the first
+#: CLUST_SIZE stream arrivals per synthetic class. Classification stays
+#: SUP_SIZE/TEST_SIZE at every checkpoint. One constant, consumed by BOTH
+#: systems (p2_stream.py loaders for PCMC in-run; fpcmc_scorer.py for
+#: F-PCMC), so the clustering eval sets stay byte-identical. Measured basis:
+#: their cluster() is quadratic python-level jaccard (1.11 us/pair) —
+#: 100/class would cost 2.88 h/run in-run vs 0.19 h/run at 25.
+CLUST_SIZE = 25
 
 #: sleep_freq sentinel while steering the schedule: large enough that the
 #: modulo clause of their trigger (pcmc_layer.py:757) can never fire on its
@@ -93,6 +111,9 @@ def build_run_config(
             "stream_bs": 1,  # their P2-equivalent streaming granularity
             "sup_size": 4 if smoke else SUP_SIZE,
             "test_size": 4 if smoke else TEST_SIZE,
+            # Q6: clustering subsample (strict subset of the test set; the
+            # smoke value 2 < 4 exercises the subsampling path end-to-end).
+            "clust_size": 2 if smoke else CLUST_SIZE,
         },
         "model": {
             "name": "pcmc",
