@@ -96,6 +96,10 @@ REQUIRED_FILES = [
     "baselines/pcmc_sleep/env/README.md",
     "baselines/pcmc_sleep/vendor/core/models/pcmc/pcmc_layer.py",
     "baselines/pcmc_sleep/vendor/config/model/pcmc.yaml",
+    # T17 Phase 3 — paper-protocol evaluation parity (scorer + CLI + adapter)
+    "baselines/pcmc_sleep/fpcmc_scorer.py",
+    "baselines/pcmc_sleep/score_fpcmc.py",
+    "baselines/pcmc_sleep/pcmc_dynamics.py",
 ]
 
 

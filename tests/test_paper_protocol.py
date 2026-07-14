@@ -446,6 +446,58 @@ def test_score_checkpoint_populations(tmp_path):
     assert rec["aux_clust_acc"] is not None  # novel_01 (synthetic) at task 2
 
 
+# ------------------------------------------------ [U] lossy dynamics adapter
+
+
+def test_pcmc_dynamics_adapter(tmp_path):
+    """Q10b: the lossy PCMC->memory-dynamics mapping on a synthetic Phase 2
+    artifact tree (longest ltm_size_history wins; checkpoint sampling;
+    missing steps -> None; snapshot field extraction)."""
+    import json as _json
+
+    import torch
+
+    from baselines.pcmc_sleep import pcmc_dynamics as dyn
+
+    cell = tmp_path / "cell"
+    deep = cell / "logs/run/cifar100-p2/task_1/iter_200/layer_L0"
+    deep.mkdir(parents=True)
+    np.save(deep / "ltm_size_history.npy", np.arange(240))
+    early = cell / "logs/run/cifar100-p2/task_0/iter_-1/layer_L0"
+    early.mkdir(parents=True)
+    np.save(early / "ltm_size_history.npy", np.arange(3))
+
+    cp = cell / "checkpoints"
+    cp.mkdir()
+    (cp / "t0.json").write_text(_json.dumps(
+        {"step": -1, "task": 0, "eval_wall_time_s": 1.0}))
+    (cp / "step_00200.json").write_text(_json.dumps(
+        {"step": 200, "task": 1, "eval_wall_time_s": 2.5}))
+    (cp / "step_00300.json").write_text(_json.dumps(
+        {"step": 300, "task": 1, "eval_wall_time_s": 2.0}))
+    (cell / "summary.json").write_text(_json.dumps(
+        {"sleep_steps_executed": [150]}))
+
+    d = dyn.dynamics(cell, with_snapshots=False)
+    assert d["sleep_steps_executed"] == [150]
+    # step 200 sampled from the LONGEST history (value = index by
+    # construction); step 300 beyond it -> None; t0 (pre-stream) excluded.
+    assert d["ltm_size_at_checkpoints"] == {200: 200, 300: None}
+    assert d["eval_wall_times_s"] == {-1: 1.0, 200: 2.5, 300: 2.0}
+
+    snaps = cell / "snapshots"
+    snaps.mkdir()
+    torch.save(
+        {"layers": [{"distance_threshold": 0.5, "sleep_cycles": 1,
+                     "ltm": torch.zeros(7, 4), "stm": torch.zeros(3, 4)}]},
+        snaps / "step_00099.pt",
+    )
+    assert dyn.snapshot_dynamics(cell) == [
+        {"step": 99, "distance_threshold": 0.5, "sleep_cycles": 1,
+         "n_ltm": 7, "n_stm": 3}
+    ]
+
+
 # --------------------------------------------------- [I][slow] archived cell
 
 
