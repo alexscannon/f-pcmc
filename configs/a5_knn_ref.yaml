@@ -1,0 +1,4 @@
+# A5 (knn_ref-only) — single sub-scorer ablation (PRD §7.4; isolates the
+# composed knn_vmf scorer). Declared deviations from configs/default.yaml:
+# scorer.
+scorer: knn_ref

@@ -1,0 +1,7 @@
+# A4 — no merging (PRD §7.4; isolates FR-8, measures the fragmentation
+# contribution). Every merge pathway is off: the periodic FR-8 sweep, the
+# on-promotion check, and FR-6 residual consolidation (whose only action is
+# merging) — owner-approved scope 2026-07-13.
+# Declared deviations from configs/default.yaml: ablation.no_merge.
+ablation:
+  no_merge: true

@@ -1,0 +1,5 @@
+# F-PCMC main system run (PRD §7.4 comparisons are made against this).
+# Declared deviations from configs/default.yaml: NONE — this file exists so
+# every run row of the T15 matrix has its own config artifact (NFR-2).
+# Protocol and seed are matrix axes supplied by run_matrix.py, not keys here.
+{}

@@ -1,0 +1,6 @@
+# A5 (vmf-only) — single sub-scorer ablation (PRD §7.4; isolates the
+# composed knn_vmf scorer). Below n_vmf_min the FR-4.2 fallback to knn_ref
+# still applies per concept (that fallback is part of the vmf scorer's
+# definition, not of the composition). Declared deviations from
+# configs/default.yaml: scorer.
+scorer: vmf

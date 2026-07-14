@@ -1,0 +1,5 @@
+# B3 — oracle ceiling (PRD §7.4): ground-truth-labeled routing
+# (baselines/oracle.py::run_oracle). Reads theta_promote and the seed axis;
+# everything else is irrelevant to a pure-GT router. Declared deviations
+# from configs/default.yaml: NONE.
+{}

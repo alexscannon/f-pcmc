@@ -1,0 +1,6 @@
+# A6 — frozen ResNet-50 encoder (PRD §7.4; encoder ablation). run_matrix.py
+# maps the encoder key to the ResNet50_32px sibling of the roots.env-resolved
+# EMBEDDINGS_DIR (docs/ASSETS.md §1: same schema, D=2048). Degraded results
+# are the expected finding. Declared deviations from configs/default.yaml:
+# encoder.
+encoder: resnet50
