@@ -1,0 +1,114 @@
+# Continual Learning Evaluation Pipeline Configuration
+
+# --- Embedding paths ---
+embeddings_dir: ${EMBEDDINGS_DIR}
+cifar100_mapping: ${PROJECT_ROOT}/cifar100_super_subclass_mapping.json
+
+# --- Embedding files ---
+real_cifar100_file: real_cifar100.pt
+synthetic_ind_file: ind.pt
+novel_subclasses_file: novel_subclasses.pt
+novel_superclasses_file: novel_superclasses.pt
+
+# --- Output ---
+output_dir: ${DATA_ROOT}/evaluation/${MODEL_TAG}/${EXPERIMENT_TAG}/continual
+
+# --- IND model initialization ---
+regularization_epsilon: 1.0e-6
+threshold_percentile: 95
+
+# --- Stream ---
+random_seed: 42
+ind_warmup_count: 1000
+# Post-warmup remainder ordering (the IND_REAL warmup prefix is always preserved).
+# CLI --stream-order overrides this value.
+#   random     : remainder fully shuffled (i.i.d. baseline) — current behavior
+#   sequential : contiguous per-subclass blocks (A,A,A,B,B,B,C,C,C)
+#   clustered  : small dispersed same-subclass blocks (A,B,B,C,A,A,B,C,C,C,A,A,C)
+# Non-"random" modes write to a suffixed output dir (e.g. continual_order_sequential).
+stream_order: random
+stream_cluster_size: [2, 4]   # clustered mode: variable mini-block size range [lo, hi]
+
+# --- Oracle decomposition ---
+# Replace exactly one pipeline component with a ground-truth-perfect version to
+# isolate its contribution. CLI --oracle-mode overrides this value.
+#   none       : current implementation (no oracle) — baseline
+#   detection  : perfect, promotion-aware IND/OOD routing; clustering stays real
+#   clustering : perfect (100%-pure) cluster formation from true subclass labels;
+#                detection stays real (trigger/scan launch unchanged)
+#   both       : perfect detection + perfect clustering (upper bound)
+# Non-"none" modes write to a suffixed output dir (e.g. continual_oracle_detection).
+oracle_mode: none
+
+# --- Paradigm ---
+# Continual-learning paradigm (detection + novel-class discovery). Default
+# preserves current behavior. Other values: knn_dpmeans, vmf_dpmm.
+paradigm: mahalanobis_hdbscan
+
+# --- Clustering ---
+cluster_interval: 50
+min_ood_for_clustering: 30
+min_cluster_sizes: [10, 15, 20, 25, 30]
+jaccard_dedup_threshold: 0.80
+
+# --- UMAP Preprocessing ---
+# Project OOD buffer embeddings to lower dimensions before HDBSCAN.
+# Set to null to disable (raw 1024d embeddings).
+umap_n_components: 50
+umap_n_neighbors: 15
+umap_min_dist: 0.0
+
+# --- Promotion ---
+min_promote_size: 10
+min_intra_cosine_sim: 0.65
+min_soft_prob: 0.60
+
+# --- kNN-DPmeans paradigm (only used when paradigm: knn_dpmeans) ---
+# kNN-gallery OOD detection: tau (kth-neighbor cosine distance) and the DP-means
+# spawn threshold lambda are both calibrated from threshold_percentile above.
+# The mean_soft_prob promotion check is bypassed (DP-means is hard-assignment).
+knn:
+  k: 20              # suggested sweep: 5, 20, 50
+  distance: kth      # "kth" or "mean_k"
+dpmeans:
+  max_iters: 20
+  convergence_tol: 1.0e-4
+
+# --- vMF-DPMM paradigm (only used when paradigm: vmf_dpmm) ---
+# Streaming von Mises-Fisher Dirichlet-process mixture. No detection threshold
+# and no batched clustering (threshold_percentile / cluster_interval /
+# min_ood_for_clustering / min_soft_prob are ignored; a warning is logged).
+# NOTE: at D=2048 (v=1023) scipy.special.ive underflows for kappa<~1000, so the
+# A&S 9.7.7 uniform asymptotic log-Bessel is the production path; ive is used as
+# a validation oracle (cross-checked at warmup where it is finite).
+vmf_dpmm:
+  alpha_calibration_target: 100    # target component count (warmup-as-stream calibration)
+  alpha_search_range: [1.0e-6, 100.0]
+  alpha_search_max_iters: 20
+  kappa_init: 100.0                # initial kappa for newly spawned components
+  kappa_min: 1.0
+  kappa_max: 1.0e+6
+  kappa_promote_min: 50.0          # promotion tightness gate on kappa
+  prune_singletons: true
+  prune_interval: 500
+  prune_age: 1000
+  # Which candidate detection score populates the primary `score` column.
+  # score_current (the original -max log-responsibility readout) |
+  # score_logratio | score_entropy | score_density. The other three are always
+  # logged in per_step.csv as extra columns regardless of this choice.
+  # Phase A winner (highest all-OOD AUROC) → score_entropy (used for Phase C).
+  primary_score: score_entropy
+
+# --- knn_vmf composed paradigm (only used when paradigm: knn_vmf) ---
+# kNN-gallery detection (inherits knn.k / knn.distance) + streaming vMF mixture
+# over the OOD stream restricted to unnamed components (inherits
+# vmf_dpmm.kappa_init / kappa_promote_min and min_promote_size). Only the alpha
+# target differs from standalone vMF: it targets the expected novel-class count.
+knn_vmf:
+  alpha_calibration_target_novel: 50
+
+# --- Evaluation ---
+rolling_window: 500
+csv_flush_interval: 1000
+tsne_sample_size: 5000
+tsne_perplexity: 30
