@@ -226,10 +226,10 @@ only legitimate new code is stream/data/config plumbing and persistence.
 
 ## 8. OPEN DESIGN QUESTIONS — ask the owner BEFORE implementing
 
-Q1. **Patch geometry** if PLAN.md still lacks the 0.3 result: native-32
-    (img 32 / patch 16 / stride 8) vs their-120 (img 120 / patch 60 /
-    stride 30). Present the spike numbers if available (re-run
-    `pcmc_geometry_spike.py` if needed), else ask which to pre-register.
+Q1. **Patch geometry — RESOLVED, do not re-ask** (PLAN.md Phase 0.3):
+    their-120 (upscale to 120×120, patch 60, stride 30) won the same-budget
+    spike 70.8/71.4 vs 63.4/51.4 (class acc / clust purity) and is the
+    paper's own geometry. Pre-registered for all T17 runs.
 Q2. **Sleep schedule on P2**: P2 phases are unequal (4×4,286 / 2×357 /
     5×641–846 steps). Their mechanism is fixed-interval (`sleep_start`,
     `sleep_freq`). Options: (a) fixed interval ≈ one sleep per mean phase

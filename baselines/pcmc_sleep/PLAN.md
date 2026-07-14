@@ -50,9 +50,20 @@ failing inside the F-PCMC machinery.
   novelty detection + STM→LTM promotions, one full sleep (encoder retrain +
   centroid re-embed). `requirements.txt` upstream is an unusable machine
   freeze — a curated minimal env is part of Phase 2.
-- **0.3 geometry spike**: in flight (native-32/patch-16/stride-8 vs
-  upscale-120/patch-60/stride-30, same budget, their eval protocol on 5 real
-  CIFAR classes).
+- **0.3 geometry spike: DECIDED — their-120 geometry** (upscale CIFAR to
+  120×120, patch 60, stride 30). Same-budget head-to-head (5 real CIFAR
+  classes, 50 epochs, RN18, `pretrained=False`, their supervise/classify
+  eval): their-120 scored **70.8% classification / 71.4% clustering purity**
+  vs native-32 (img 32, patch 16, stride 8) at **63.4% / 51.4%** — B wins
+  on both metrics by wide margins (+7.4 acc, +20.0 purity) at ~1.6× train
+  cost (679 s vs 429 s). Fidelity and fairness agree: their-120 is also the
+  paper's own pipeline geometry (patch 60 per their §4.4 ablation). Small-
+  scale proxy, but unambiguous and consistent with the paper's finding that
+  small patches hurt. Pre-registered for all T17 runs. (Bonus data point:
+  RN18 @ bs 256 @ 120px trained inside the ~6 GB GPU share — see the
+  shared-GPU note in HANDOFF_PHASE2.md.)
+  The spike also surfaced the `init_memory` persistent-workers deadlock —
+  mitigation and evidence recorded in HANDOFF_PHASE2.md §5.
 
 ### Code facts that bind later phases (from reading `reference/pcmc`)
 
