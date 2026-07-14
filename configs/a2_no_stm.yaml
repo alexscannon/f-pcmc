@@ -1,0 +1,7 @@
+# A2 — no STM (PRD §7.4; isolates outlier filtering). All STM management
+# off: no maturity gate (every candidate is tier-1-eligible from birth), no
+# capacity/LRU eviction, no FR-6 residual pool, and promotion is
+# match_count >= theta alone (owner-approved semantics 2026-07-13).
+# Declared deviations from configs/default.yaml: ablation.no_stm.
+ablation:
+  no_stm: true

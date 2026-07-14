@@ -41,6 +41,16 @@ PRD_S8_DEFAULTS = {
 # PRD §8, nested blocks.
 PRD_S8_UMAP = {"dim": 50, "n_neighbors": 15, "min_dist": 0.0, "metric": "cosine"}
 PRD_S8_HDBSCAN = {"min_cluster_sizes": (10, 15, 20, 25, 30), "selection": "eom"}
+# T15 addition BEYOND the PRD §8 block (TASKS T15 "config-driven ablation
+# switches"; owner-approved nested-block shape 2026-07-13, recorded in
+# docs/CHANGES.md T15). All-off is the schema default and default.yaml
+# deliberately omits the block, so every §8 assertion above is untouched.
+T15_ABLATION = {
+    "global_tau": False,
+    "no_stm": False,
+    "no_recurrence": False,
+    "no_merge": False,
+}
 
 
 def test_config_roundtrip(tmp_path):
@@ -61,11 +71,16 @@ def test_config_roundtrip(tmp_path):
     rt_path.write_text(text)
     assert FPCMCConfig.from_yaml(rt_path) == cfg
 
-    # Serialized form carries the complete §8 key set (run artifacts embed this).
+    # Serialized form carries the complete §8 key set (run artifacts embed
+    # this) plus the T15 ablation block (additive, owner-approved 2026-07-13;
+    # asserted exactly so any further schema drift is caught here).
     dumped = yaml.safe_load(text)
-    assert set(dumped) == set(PRD_S8_DEFAULTS) | {"umap", "hdbscan"}
+    assert set(dumped) == set(PRD_S8_DEFAULTS) | {"umap", "hdbscan", "ablation"}
     assert set(dumped["umap"]) == set(PRD_S8_UMAP)
     assert set(dumped["hdbscan"]) == set(PRD_S8_HDBSCAN)
+    assert dumped["ablation"] == T15_ABLATION, (
+        "ablation flags must all default to off (the full F-PCMC system)"
+    )
 
 
 def test_config_rejects_unknown_key():

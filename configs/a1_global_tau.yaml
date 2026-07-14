@@ -1,0 +1,7 @@
+# A1 — global threshold instead of per-concept tau (PRD §7.4; isolates FR-5).
+# Every concept's (tau, tau_vmf) is pinned to the frozen FR-5.3 GlobalPrior
+# pair; no LOO percentiles, no shrinkage, no promotion recompute
+# (fpcmc/thresholds.py; owner-approved semantics 2026-07-13).
+# Declared deviations from configs/default.yaml: ablation.global_tau.
+ablation:
+  global_tau: true

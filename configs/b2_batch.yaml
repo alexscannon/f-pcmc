@@ -1,0 +1,5 @@
+# B2 — batch knn_vmf pipeline (PRD §7.4): the static batch detector applied
+# at each protocol checkpoint (baselines/batch_knn_vmf.py). Its kNN
+# parameters (k=20, kth-NN cosine) are source-pinned module constants, not
+# FPCMCConfig keys. Declared deviations from configs/default.yaml: NONE.
+{}

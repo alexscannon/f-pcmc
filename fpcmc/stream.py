@@ -104,6 +104,16 @@ class StreamRunner:
         self.promoter = PromotionEvaluator(config)
         self.sweeper = MergeSweeper(config, prior)
         self.residual = ResidualClusterer(config, self.sweeper)
+        # T15 ablation switches (owner-approved semantics 2026-07-13).
+        # A4 no_merge: EVERY merge pathway off — the periodic FR-8 sweep, the
+        # on-promotion check, and FR-6 residual consolidation (whose only
+        # action is merging, so it is skipped outright rather than left to
+        # cluster without effect). A2 no_stm: the residual pool is STM
+        # machinery (it exists to consolidate immature candidates), so FR-6
+        # is off there too; the FR-8 sweep itself stays on under A2.
+        ablation = config.ablation
+        self._merges_enabled = not ablation.no_merge
+        self._residual_enabled = not (ablation.no_merge or ablation.no_stm)
         self._log_path = Path(log_path)
         self._checkpoint_steps = tuple(sorted({int(s) for s in checkpoint_steps}))
         self._evictions_logged = 0
@@ -142,7 +152,8 @@ class StreamRunner:
                 "concept_id": result.concept_id,
                 "novelty": _finite(result.novelty),
             })
-            self.residual.note_seed(result.concept_id, z, step)
+            if self._residual_enabled:
+                self.residual.note_seed(result.concept_id, z, step)
         else:
             self._emit(f, self._assign_record(result, step))
             decision = self.promoter.check(
@@ -150,13 +161,15 @@ class StreamRunner:
             )
             if decision is not None and decision.promoted:
                 self._emit(f, self._promote_record(self.promoter.promotion_log[-1]))
-                self.sweeper.on_promotion(self.store, step)  # FR-8 on-promotion check
-                self._drain_merges(f)
+                if self._merges_enabled:
+                    self.sweeper.on_promotion(self.store, step)  # FR-8 on-promotion check
+                    self._drain_merges(f)
 
-        self.residual.hook(self.store, step)
-        self._drain_merges(f)
+        if self._residual_enabled:
+            self.residual.hook(self.store, step)
+            self._drain_merges(f)
 
-        if step > 0 and step % self.config.T_merge == 0:
+        if self._merges_enabled and step > 0 and step % self.config.T_merge == 0:
             self.sweeper.sweep(self.store, step)
             self._drain_merges(f)
 

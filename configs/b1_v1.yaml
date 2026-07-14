@@ -1,0 +1,8 @@
+# B1 — v1 streaming pipeline (PRD §7.4): the vendored, untouched baseline
+# under baselines/v1/, driven by baselines/v1_stream.py::run_v1. The v1
+# subprocess reads its own vendored config.yaml verbatim; run_matrix.py reads
+# only the seed axis. Declared deviations from configs/default.yaml: NONE.
+# B1 runs on P1 only — the vendored pipeline builds its own P1 stream and
+# cannot consume P2 without modifying the frozen port (owner ruling
+# 2026-07-13); run_matrix marks B1 x P2 unsupported.
+{}

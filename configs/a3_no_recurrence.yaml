@@ -1,0 +1,6 @@
+# A3 — no recurrence criterion (PRD §7.4; isolates FR-7 criterion 4).
+# Promotion drops the m_windows recurrence requirement; size, cohesion and
+# separation are unchanged — the outlier-burst pathology returns.
+# Declared deviations from configs/default.yaml: ablation.no_recurrence.
+ablation:
+  no_recurrence: true

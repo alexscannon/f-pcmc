@@ -71,6 +71,19 @@ REQUIRED_FILES = [
     "baselines/v1/main.py",
     "baselines/v1/config.yaml",
     "baselines/v1/paradigms/mahalanobis_hdbscan.py",
+    # T15 — ablation run configs (one per PRD §7.4 row) + matrix/sweep runner
+    "run_matrix.py",
+    "configs/fpcmc_default.yaml",
+    "configs/b1_v1.yaml",
+    "configs/b2_batch.yaml",
+    "configs/b3_oracle.yaml",
+    "configs/a1_global_tau.yaml",
+    "configs/a2_no_stm.yaml",
+    "configs/a3_no_recurrence.yaml",
+    "configs/a4_no_merge.yaml",
+    "configs/a5_knn_ref.yaml",
+    "configs/a5_vmf.yaml",
+    "configs/a6_resnet50.yaml",
 ]
 
 

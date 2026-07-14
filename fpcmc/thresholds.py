@@ -175,7 +175,19 @@ def recompute_thresholds(concept: Concept, config: FPCMCConfig, prior: GlobalPri
     decision 2): tau at n=1 is set to the prior exactly; tau_vmf below
     n_vmf_min is left untouched (unread in VmfScorer's fallback mode).
     Resets the FR-5.1 dirty counter.
+
+    A1 ablation (`config.ablation.global_tau`, PRD §7.4; owner-approved
+    semantics 2026-07-13): every recompute holds BOTH taus at the frozen
+    FR-5.3 prior pair — the prior IS the pooled-T0 global threshold the
+    PRD names — so all concepts carry one global threshold and per-concept
+    adaptation (FR-5.1/5.2/5.4) is off.
     """
+    if config.ablation.global_tau:
+        concept.tau = float(prior.tau)
+        concept.tau_vmf = float(prior.tau_vmf)
+        concept.refset_changes_since_tau = 0
+        return
+
     n = concept.ref_set.shape[0]
     q = config.tau_percentile_q
 
@@ -214,7 +226,15 @@ def recompute_on_promotion(concept: Concept, config: FPCMCConfig) -> None:
     the pure FR-5.1 percentile rule — no shrinkage, regardless of the status
     field's current value (T8's atomic promotion flips status around this
     call). This calibrated boundary is what makes routing promotion-aware.
+
+    A1 ablation: no per-concept calibration — the concept's taus are already
+    the global prior (seeded there and held by every recompute), so promotion
+    keeps them and only resets the dirty counter.
     """
+    if config.ablation.global_tau:
+        concept.refset_changes_since_tau = 0
+        return
+
     n = concept.ref_set.shape[0]
     if n < 2:
         raise ValueError(
