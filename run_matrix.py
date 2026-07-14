@@ -43,6 +43,7 @@ import argparse
 import dataclasses
 import json
 import math
+import time
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -225,6 +226,10 @@ def run_cell(
     cell_dir.mkdir(parents=True, exist_ok=True)
     resolved_path.write_text(resolved_yaml, encoding="utf-8")
 
+    # Wall time lives in summary.json ONLY — never in events.jsonl, whose
+    # byte-determinism (FR-9.2) a timestamp would break. NFR-1 budget guard:
+    # test_runtime_budgets reads this field from the archive.
+    t_start = time.perf_counter()
     if system == "b1_v1":
         summary = _run_b1(cell_dir, config, force=force)
     elif system == "b2_batch":
@@ -233,6 +238,7 @@ def run_cell(
         summary = _run_b3(cell_dir, config, protocol)
     else:
         summary = _run_fpcmc(cell_dir, config, protocol)
+    summary["wall_time_seconds"] = time.perf_counter() - t_start
 
     summary["cell"] = {"system": system, "protocol": protocol, "seed": int(seed)}
     _write_summary(cell_dir, summary)
@@ -369,7 +375,9 @@ def run_sweep(
             continue
         cell_dir.mkdir(parents=True, exist_ok=True)
         resolved_path.write_text(resolved_yaml, encoding="utf-8")
+        t_start = time.perf_counter()
         summary = _run_fpcmc(cell_dir, config, "p1")
+        summary["wall_time_seconds"] = time.perf_counter() - t_start
         summary["cell"] = {k: cell[k] for k in ("system", "protocol", "seed", "param", "value")}
         _write_summary(cell_dir, summary)
         cell["dir"] = str(cell_dir)
