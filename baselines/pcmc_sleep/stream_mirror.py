@@ -70,6 +70,10 @@ class P2PixelMirror:
         return self._stream.manifest
 
     @property
+    def phases(self):
+        return self._stream.phases
+
+    @property
     def t0_classes(self):
         return self._stream.t0_classes
 
@@ -124,6 +128,18 @@ class P2PixelMirror:
         from PIL import Image
 
         return Image.fromarray(self.image_array(i))
+
+    # --------------------------------------------- eval-side CIFAR access
+    # (T17 Phase 2: the PCMC eval loaders draw supervise/test images from the
+    # canonical CIFAR splits directly, not through stream indices.)
+
+    def cifar_rows(self, split: str, cls: str) -> np.ndarray:
+        """Ascending pickle-row indices of ``cls`` in the given split."""
+        return np.flatnonzero(self._cifar[split].fine_names == str(cls))
+
+    def cifar_image(self, split: str, index: int) -> np.ndarray:
+        """(32, 32, 3) uint8 image at a canonical pickle row."""
+        return self._cifar[split].images[int(index)]
 
     def true_class_from_source(self, i: int) -> str:
         """The class as derivable from the SOURCE alone (pickle label / path
