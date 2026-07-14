@@ -84,6 +84,8 @@ REQUIRED_FILES = [
     "configs/a5_knn_ref.yaml",
     "configs/a5_vmf.yaml",
     "configs/a6_resnet50.yaml",
+    # T16 — results workbook / scorecard generator
+    "eval/workbook.py",
 ]
 
 
