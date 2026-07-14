@@ -59,6 +59,11 @@ SLEEP_EPOCHS = 300
 SUP_SIZE = 100
 TEST_SIZE = 100
 
+#: Their vote-weight threshold (pcmc_layer.py:60 ``rho_task = params.rho``;
+#: released pcmc.yaml value). Protocol constant shared by both systems: the
+#: layer config below and the F-PCMC scorer read this one name.
+RHO = 0.25
+
 #: Phase 3 owner decision Q6 (2026-07-14, PLAN.md): the clustering eval runs
 #: on a per-class subsample — the first CLUST_SIZE items of each class's
 #: seeded test draw (CIFAR; with TEST_SIZE=100 the draw is all 100 canonical
@@ -158,7 +163,7 @@ def build_run_config(
                     "M_min": 3,
                     "init_M": 5,
                     "forgetting_factor": 3,
-                    "rho": 0.25,
+                    "rho": RHO,
                     "temperature": 0.5,
                     "cj": 0.8,
                     "cj_b": 0.6,
