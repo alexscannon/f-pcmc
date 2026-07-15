@@ -147,6 +147,35 @@ GPU free (`nvidia-smi` 15 MiB used, llama-server down); DATA_ROOT 1.4 TB free.
   buffers still evolve mid-stream (promotions happen without sleep), so the
   phase-end snapshots are not redundant. No driver change.
 
+## Phase 4 status (2026-07-14, IN PROGRESS — the 12-cell production matrix)
+
+The batch runner + manifest are built, tested, and committed (commit
+`7e759a6`); the matrix runs are a multi-day, resumable effort that continues
+across sessions (one shared card, ~180 GPU-h with the Q11 pretrain sharing).
+
+As-built (CPU-side, committed):
+- `run_pcmc_matrix.py` — orders the 12 cells arch→seed→**sleep-before-nosleep**
+  so each (arch,seed)'s sleep cell populates the `--pretrain-cache` its nosleep
+  twin reuses (Q11 ⇒ 6 pretrains). Serial (Q12); **stop-and-report** on the
+  first cell failure (Q13); writes `run_manifest.json` at the pcmc_sleep root
+  (per-cell resolved-config sha256, wall time, sleep steps, final LTM + class/
+  clust acc, NFR-1 over-budget flag). CLI: `--only`, `--dry-run`, `--force`,
+  `--timeout`, `--cache-dir`, `--out-root`. Shared cache at
+  `pcmc_sleep/_pretrain_cache/{arch}_seed{seed}_ep500_img120.pkl`.
+- Tests: 3 [U] (enumeration order + naming, cache-key parity with driver.py,
+  budget projection) added to `tests/test_pcmc_driver.py`; `run_pcmc_matrix.py`
+  added to `test_layout.py`. Fast suite green (127 passed); GPU driver smoke
+  re-verified green on the free card (87.6 s).
+
+Runs:
+- **Cell 1/12 `pcmc_resnet18_sleep/p2_seed42` LAUNCHED** (2026-07-15 ~03:10Z).
+  **Q11 gate measurement (RN18 T0 pretrain): 78,125 batches @ ~1.30 s/it ⇒
+  ~28 h**, confirming the §5 ~30 GPU-h/pretrain projection (no cost surprise).
+  RN18 @ bs256 @ 120px uses **~5 GB** GPU — fits the shared-card budget (Q12).
+- Remaining 11 cells pending cell-1 completion; cell 2 (rn18 nosleep seed42)
+  reuses the cached encoder (cache HIT). RN50 peak VRAM to be measured on the
+  first RN50 cell (Q12) before its batch size is touched.
+
 ## Phase 0 findings (2026-07-14)
 
 - **0.1 Alignment: PROVEN, 0 mismatches over all 63,326 rows.** Every pool
