@@ -253,6 +253,48 @@ disagree, seed-unstable).
    concepts↔classes with 100 labels/class and votes 1-per-image — the
    whole-image degenerate case of their Eq. 6–7, documented). Secondary: the
    lossy JSONL adapter for memory-dynamics metrics.
+   **DONE 2026-07-14** (owner Q6–Q10 answers above). As built:
+   - `fpcmc_scorer.py` — the whole-image degenerate case, documented
+     function-by-function against vendored line numbers (supervise
+     pcmc_layer.py:211-274 → `supervise_cent_g`; classify 277-312 +
+     pcmc.py:106-181 → `classify`; embed 314-323 → `match_concepts`;
+     cluster pcmc.py:221-268 → `cluster_analytic` per Q9, with their
+     `purity_score` math verbatim including the 0/0→nan per-class quirk,
+     serialized as JSON null). [U]-tested against LITERAL transliterations
+     of their per-image loops (tests/test_paper_protocol.py).
+   - Eval sets byte-identical to the PCMC side (§5 parity contract):
+     `cifar_eval_rows` reproduces `p2_stream._cifar_eval_items` through the
+     same `make_rng` substreams; pool-row ↔ mirror-row identity asserted
+     over all 100 classes in the [I] test. Q6 clustering subset = per-class
+     prefix of the test draw; synthetic classes = first CLUST_SIZE stream
+     arrivals, labels from `cluster_label_map`.
+   - `fpcmc/replay.py` gained the additive `iter_checkpoint_states` (Q8a):
+     per-record application extracted into a shared `_apply_record`,
+     `replay()` behavior unchanged, T11 replay tests untouched and green.
+   - PCMC-side Q6 wiring: `dataset.clust_size` (25; smoke 3 — must stay > 2,
+     their SpectralClustering needs n_clusters < n_samples),
+     `clust_loader`/`cluster_loader` subsampling, and driver-side eval
+     composition (the same three vendored calls `PCMC.eval` makes, with
+     cluster() fed the subset loader). GPU driver smoke re-run green
+     (86.5 s on the 3090).
+   - `score_fpcmc.py` scored fpcmc_default + a6_resnet50 × seeds {42,43,44}
+     — 45 records/cell (t0 + 44 checkpoints), EVERY reconstructed state
+     verified exactly against its checkpoint record (counts + full tau
+     snapshot) — to `${DATA_ROOT}/evaluation/f_pcmc_runs/pcmc_sleep/
+     paper_protocol/<system>/p2_seed<N>/` in the Phase 2 checkpoint-JSON
+     shape (+ Q7 `ltm_only` block and n_tier1/n_ltm/n_stm context;
+     manifest.json at the root). ~25 s per cell.
+   - `pcmc_dynamics.py` — the Q10b lossy adapter (per-step LTM size history
+     sampled at checkpoints, sleep steps, eval wall times, phase-end
+     snapshot fields; losses documented field-by-field).
+   - Headline (tier-1) numbers, fpcmc_default: t0 91.5 class / 91.9 purity
+     (80 classes) declining to 78.2 / 81.2 / 80.7 class_acc at the final
+     checkpoint (100 classes; seeds 42/43/44), LTM-only 76.1 / 74.8 / 79.2;
+     149-class aux purity falls to ~53 (seed 42) as the 49 synthetic
+     classes accumulate largely unrepresented (60 nan entries).
+     a6_resnet50 (frozen RN50, 0 promotions): t0 63.9 / 63.3 → final 51.7 /
+     50.9 / 51.9 with n_tier1 only 80→86 — the frozen-RN50-fails-inside-
+     F-PCMC cell of the 2×2, now on the paper's own metric.
 4. **Runs**: {RN18, RN50} × {sleep, no-sleep} × seeds {42,43,44} (12 GPU
    runs; est. 8–15 GPU-h per sleep run, init-only for no-sleep), archived
    under `${DATA_ROOT}/evaluation/f_pcmc_runs/pcmc_sleep/`. F-PCMC/A6 cells
