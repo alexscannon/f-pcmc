@@ -116,6 +116,37 @@ disagree, seed-unstable).
   p2_seed<N>/checkpoints/*.json`; scored cells fpcmc_default × {42,43,44} +
   a6_resnet50 × {42,43,44}.
 
+## Owner decisions (2026-07-14, Phase 4 Q&A — HANDOFF_PHASE4.md §8, verbatim)
+
+Asked pre-launch as mandated (Phase 4 §8 GATES the production matrix — the one
+phase where launching before sign-off can burn real days of shared-card
+wall-clock). Answers recorded exactly as selected. Machine state at ask time:
+GPU free (`nvidia-smi` 15 MiB used, llama-server down); DATA_ROOT 1.4 TB free.
+
+- **Q11 (pretrain sharing & budget — GATES the phase)**: *"Share per
+  (arch,seed)"* — use `--pretrain-cache` so the sleep and no-sleep cells of
+  each (arch, seed) branch from the byte-identical T0 encoder: **6 pretrains,
+  not 12** (~180 GPU-h of pretrain), and the cleaner controlled comparison
+  (the bridge cell then isolates only the sleep cycles). Cache key
+  `{arch}_seed{seed}_ep{epochs}_img{size}.pkl` scopes sharing to exactly
+  (arch, seed); sleep/no-sleep collide by construction. **Protocol commitment:
+  the first real RN18 pretrain's measured wall time is reported to the owner
+  before the other 5 pretrains are committed.**
+- **Q12 (GPU scheduling / RN50 sizing)**: *"Serial, bs256, measure RN50
+  first"* — one card ⇒ cells run serially; keep the config's `pretrain_bs=256`
+  while the card is free; capture peak VRAM on the FIRST RN50 pretrain and drop
+  the batch size only if it OOMs (recording the change + its LR-horizon-quirk
+  effect). Cross-session resume already holds at cell granularity.
+- **Q13 (mid-matrix failure policy)**: *"Stop-and-report"* — on the first cell
+  failure the batch runner records the failure to the manifest, writes it, and
+  halts the whole matrix rather than skipping ahead; resumability makes the
+  restart cheap once the cause is understood.
+- **Q14 (snapshot cadence at full-matrix scale)**: *"Keep phase-end for all
+  cells"* — uniform Q4 cadence (11 phase-end snapshots + final) for both sleep
+  and no-sleep cells; disk is ample (~15 GB for all 12) and no-sleep memory
+  buffers still evolve mid-stream (promotions happen without sleep), so the
+  phase-end snapshots are not redundant. No driver change.
+
 ## Phase 0 findings (2026-07-14)
 
 - **0.1 Alignment: PROVEN, 0 mismatches over all 63,326 rows.** Every pool

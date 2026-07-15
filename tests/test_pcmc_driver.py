@@ -246,6 +246,78 @@ def test_sleep_steer_arithmetic():
     assert fired == schedule
 
 
+# --------------------------------------------- run_pcmc_matrix [U] enumeration
+
+
+def test_matrix_enumeration_order_and_naming():
+    """Phase 4 (owner Q11): 12 cells = {rn18,rn50} x {sleep,nosleep} x
+    {42,43,44}, arch outer then seed then SLEEP-before-NOSLEEP so the shared
+    T0 cache is warm for the nosleep cell of each (arch, seed). Manifest keys
+    match launch.cell_dir; selectors are unique."""
+    from baselines.pcmc_sleep import launch, run_pcmc_matrix as rm
+
+    cells = rm.enumerate_cells()
+    assert len(cells) == 12
+    # 3 axes, each fully covered.
+    assert {c.arch for c in cells} == {"resnet18", "resnet50"}
+    assert {c.seed for c in cells} == {42, 43, 44}
+    assert {c.variant for c in cells} == {"sleep", "nosleep"}
+    assert len(cells) == len({(c.arch, c.seed, c.variant) for c in cells})
+
+    # First/last pin the outer->inner ordering; sleep precedes nosleep.
+    assert (cells[0].arch, cells[0].seed, cells[0].variant) \
+        == ("resnet18", 42, "sleep")
+    assert (cells[1].arch, cells[1].seed, cells[1].variant) \
+        == ("resnet18", 42, "nosleep")
+    assert (cells[-1].arch, cells[-1].seed, cells[-1].variant) \
+        == ("resnet50", 44, "nosleep")
+
+    # For every (arch, seed) the SLEEP cell comes before its NOSLEEP twin —
+    # the load-bearing invariant for cache warming (owner Q11).
+    order = {(c.arch, c.seed, c.variant): i for i, c in enumerate(cells)}
+    for arch in ("resnet18", "resnet50"):
+        for seed in (42, 43, 44):
+            assert order[(arch, seed, "sleep")] < order[(arch, seed, "nosleep")]
+
+    # Manifest key == on-disk cell path suffix; selectors are unique tags.
+    tmp = Path("/tmp/pcmc_matrix_out")
+    for c in cells:
+        assert c.cell_dir(tmp) == launch.cell_dir(tmp, c.arch, c.sleep_on, c.seed)
+        assert c.key == f"pcmc_{c.arch}_{c.variant}/p2_seed{c.seed}"
+    assert len({c.selector for c in cells}) == 12
+
+
+def test_matrix_pretrain_cache_key_matches_driver():
+    """The runner's cache path must be byte-identical to driver.py's cache_key
+    for the production path, or sleep/nosleep would not share a T0 encoder
+    (owner Q11). Reconstruct the driver's key from the same run_config
+    constants the resolved config carries."""
+    from baselines.pcmc_sleep import run_pcmc_matrix as rm
+    from baselines.pcmc_sleep.run_config import IMG_SIZE, INIT_EPOCHS
+
+    cache = Path("/tmp/cache")
+    got = rm.pretrain_cache_file(cache, "resnet50", 43)
+    # driver.py: f"{arch}_seed{seed}_ep{init_epochs}_img{img_size}.pkl"
+    expected = cache / f"resnet50_seed43_ep{INIT_EPOCHS}_img{IMG_SIZE}.pkl"
+    assert got == expected
+    # sleep and nosleep of the same (arch, seed) resolve to the SAME file —
+    # that collision IS the sharing (both variants pass the same cache dir).
+    assert rm.pretrain_cache_file(cache, "resnet18", 42) \
+        == rm.pretrain_cache_file(cache, "resnet18", 42)
+
+
+def test_matrix_budget_projection():
+    """A cache-miss cell is projected to pay T0 pretrain; a cache-hit reuses
+    it (owner Q11) — the over-budget flag is derived from this, per cell."""
+    from baselines.pcmc_sleep import run_pcmc_matrix as rm
+
+    miss = rm.projected_hours(from_cache=False)
+    hit = rm.projected_hours(from_cache=True)
+    assert miss > hit
+    assert hit == rm.WAKE_EVAL_PROJECTION_H
+    assert miss == rm.PRETRAIN_PROJECTION_H + rm.WAKE_EVAL_PROJECTION_H
+
+
 # ----------------------------------------------------------- [I] GPU smoke
 
 

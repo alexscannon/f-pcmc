@@ -100,6 +100,8 @@ REQUIRED_FILES = [
     "baselines/pcmc_sleep/fpcmc_scorer.py",
     "baselines/pcmc_sleep/score_fpcmc.py",
     "baselines/pcmc_sleep/pcmc_dynamics.py",
+    # T17 Phase 4 — 12-cell PCMC production matrix batch runner
+    "baselines/pcmc_sleep/run_pcmc_matrix.py",
 ]
 
 
