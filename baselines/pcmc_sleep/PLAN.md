@@ -167,6 +167,54 @@ As-built (CPU-side, committed):
   added to `test_layout.py`. Fast suite green (127 passed); GPU driver smoke
   re-verified green on the free card (87.6 s).
 
+### Incident record + owner Q&A (2026-07-16) — two lost cell-1 attempts
+
+Cell 1 was launched twice and lost both times **before** its T0 pretrain could
+finish. **Their pretrain is all-or-nothing**: `Layer.pretrain`
+(vendor/core/models/pcmc/pcmc_layer.py:491-530) makes ONE pass over the
+78,125-batch repeats-expanded loader and `torch.save`s the encoder only on the
+final line; `load_pretrain` only ever loads that finished file. **There is no
+mid-pretrain checkpoint and no resume** — any interruption inside the ~28 h
+window loses the whole pass.
+
+- Attempt 1 (2026-07-15 03:10Z, `Bash run_in_background`): killed at batch
+  27,384/78,125 (~9.9 h) when the harness reaped the background task, which
+  took the child `driver.py` with it. **Lesson: harness-tracked background
+  tasks are not a durable host for multi-hour GPU runs.**
+- Attempt 2 (2026-07-15 13:08Z, detached **tmux** session — durable against
+  task reaping): ran 22 h 40 m (~81% of the pretrain, ≥ batch ~63k) and died to
+  an **unclean shutdown** (`last -x`: `tmux(156737) … - crash`; boot
+  2026-07-16 06:49 local). Nothing salvaged: empty `_pretrain_cache/`, no
+  `.pkl`, no `summary.json`. **Lesson: the scratchpad log lived in `/tmp` and
+  was wiped by the reboot — run logs now go to
+  `${DATA_ROOT}/…/pcmc_sleep/_logs/` with the other durable artifacts.**
+- Cost: ~9.9 + ~22.7 ≈ **32 GPU-h burned, 0 cells completed.**
+
+Owner Q&A (2026-07-16, verbatim option labels), asked with the evidence above
+plus the measured CPU-bound suspicion (every `nvidia-smi` sample read 0% util
+at 5 GB while batches ticked at a steady 1.30 s/it; the driver's deadlock guard
+forces `num_workers=0`, so SimCLR augmentation — 9 patches × 2 views × 256
+images @ 120 px — runs serially on 1 of 16 cores) and the recent uptime
+distribution (only 3 of 11 completed boot sessions reached 28 h):
+
+- **Recovery**: *"Just retry as-is"* — relaunch the identical paper-faithful
+  28 h pretrain; **no** dataloader change, **no** `init_epochs` reduction, **no**
+  checkpoint/resume machinery. Fidelity is preserved exactly; the cost of a
+  crash is accepted.
+- **Stability**: *"One-off outage"* — the 2026-07-16 crash was an isolated
+  power event, not a recurring risk; the machine normally holds 30 h+ (the
+  preceding session ran 86 h clean, and the 2026-07-10/11 short-session cluster
+  was planned 6.11→6.17 kernel upgrades). Plan for long runs; relaunch after
+  any rare crash.
+
+**Not adopted (recorded so a later phase need not re-derive them):** the
+`num_workers>0` + `persistent_workers=False` scoped dataloader alternative
+(HANDOFF_PHASE2 §5 leaves this door open if the abandonment path is re-proven
+under the smoke's hard timeout) — a possible 2–4× pretrain speedup at zero
+fidelity cost, declined in favour of not touching the proven deadlock guard;
+reducing `init_epochs` (Q11 option (c)) — declined, it feeds PLAN risk #1
+(under-tuned PCMC ⇒ hollow win).
+
 Runs:
 - **Cell 1/12 `pcmc_resnet18_sleep/p2_seed42` LAUNCHED** (2026-07-15 ~03:10Z).
   **Q11 gate measurement (RN18 T0 pretrain): 78,125 batches @ ~1.30 s/it ⇒
