@@ -215,6 +215,46 @@ fidelity cost, declined in favour of not touching the proven deadlock guard;
 reducing `init_epochs` (Q11 option (c)) — declined, it feeds PLAN risk #1
 (under-tuned PCMC ⇒ hollow win).
 
+### Deadline replan + owner Q&A (2026-07-17) — results needed in 2 days
+
+Owner set a hard deadline: **results by ~2026-07-19 21:00Z**. Full-matrix
+reality at that point: cell 1 attempt 3 healthy — its 28.2 h pretrain DONE and
+durably cached (`_pretrain_cache/resnet18_seed42_ep500_img120.pkl`), sleep
+tail running. Corrected cost model: a sleep cell pays ~9–10 h of sleep
+retraining (11 cycles × ~50 min) on top of pretrain — the earlier "~0.2 h
+tail" figure was the frozen-side eval cost only. Serial full matrix ≈ ~300
+GPU-h ⇒ cannot fit 48 h; measured evidence gathered for the replan: **GPU 75%
+idle (avg ~13% util) during training — the workload is CPU-augmentation-bound
+(driver ~7 of 16 cores)**; 16 GB VRAM free; but system RAM is the real
+constraint (30 GB total; the wake/sleep-phase driver accumulates ~20.5 GB RSS,
+pretrain-phase only ~2.8 GB).
+
+Owner Q&A (2026-07-17, verbatim option labels):
+
+- **48h plan**: *"A: Concurrent RN18×3 (Recommended)"* — launch seeds 43+44
+  RN18 pretrains in parallel with cell 1's tail; verify contention at 30 min
+  (abort one if >30% slowdown). Target: all 6 RN18 cells inside the window ⇒
+  the pre-registered 3-seed decision rule evaluable on the paper's primary
+  arch. Zero fidelity cost; **overrides the Q12 "serial" scheduling decision
+  only** (Q12's bs256 + measure-RN50-first stand).
+- **Speedup fix**: *"Benchmark; apply only if needed (Recommended)"* — the
+  `num_workers>0` dataloader change is benchmarked, applied to remaining
+  pretrains ONLY if the contention check shows the deadline slipping; recorded
+  as plumbing heterogeneity (seed 42 pretrained with workers=0) + deadlock
+  re-proof via the smoke's hard timeout before use.
+- **RN50**: *"Defer, full fidelity (Recommended)"* — the RN50 half runs after
+  the deadline at the unchanged 500-epoch config, reported as an addendum;
+  the 2-day deliverable is explicitly RN18-anchored.
+
+Concurrency launch discipline (RAM-driven, as-executed): one driver added at a
+time with RSS/available-RAM checks between; two sleep-phase tails (~20 GB
+each) can NOT coexist on 30 GB — tails stagger. Concurrent cells are launched
+via `run_pcmc_matrix.py --only <cell>` in separate tmux sessions (durable logs
+under `${DATA_ROOT}/…/pcmc_sleep/_logs/`); the manifest's read-modify-write
+race between simultaneously-finishing cells is accepted — entries derive from
+each cell's durable `summary.json` and are reconstructible by re-invoking
+`--only` (resume = no-op).
+
 Runs:
 - **Cell 1/12 `pcmc_resnet18_sleep/p2_seed42` LAUNCHED** (2026-07-15 ~03:10Z).
   **Q11 gate measurement (RN18 T0 pretrain): 78,125 batches @ ~1.30 s/it ⇒
