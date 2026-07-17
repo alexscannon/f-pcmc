@@ -46,15 +46,41 @@ import numpy as np
 import torch
 import yaml
 
-# ---- deadlock guard: force in-process data loading BEFORE any vendored
+# ---- deadlock guard: force the data-loading mode BEFORE any vendored
 # import can bind torch.utils.data.DataLoader (see module docstring).
+#
+# _FORCED_WORKERS = 0 (default) is the proven in-process patch. A positive
+# value (--workers N, owner-authorized 2026-07-17 deadline replan) keeps the
+# guard but forces num_workers=N with persistent_workers=False: the observed
+# upstream deadlock needs persistent_workers=True + early iterator
+# abandonment (pcmc_layer.py:341-343); with persistent_workers=False torch
+# tears workers down when the iterator is released, so abandonment is safe
+# (re-proven by the --workers smoke under a hard timeout before production
+# use). The setting is an execution knob, NOT run semantics: it is recorded
+# in summary.json, deliberately kept OUT of resolved_config.yaml so completed
+# cells' resumability checks are unaffected. Augmentation RNG moves to worker
+# processes (different draw order than in-process) — inside the accepted
+# "seeded, not bitwise" deviation (PLAN.md owner decision 1), recorded.
 _ORIG_DATALOADER = torch.utils.data.DataLoader
+_FORCED_WORKERS = 0
+
+
+#: Workers apply ONLY to the big CPU-bound training loaders (pretrain bs=256,
+#: sleep bs=512). Their eval path constructs MANY tiny batch_size=1 loaders
+#: (pcmc.py:76-84) — giving each of those a worker pool is a fork storm (the
+#: observed failure of the blanket v1 patch: smoke hung after pretrain-save,
+#: 2026-07-17). Everything below this batch size stays in-process.
+_WORKERS_MIN_BS = 64
 
 
 def _inprocess_dataloader(*args, **kwargs):
-    kwargs["num_workers"] = 0
+    forced = _FORCED_WORKERS if kwargs.get("batch_size", 1) is not None and \
+        kwargs.get("batch_size", 1) >= _WORKERS_MIN_BS else 0
+    kwargs["num_workers"] = forced
     kwargs.pop("persistent_workers", None)
     kwargs.pop("prefetch_factor", None)
+    if forced > 0:
+        kwargs["persistent_workers"] = False
     return _ORIG_DATALOADER(*args, **kwargs)
 
 
@@ -191,7 +217,16 @@ def main(argv=None) -> int:
                         help="optional per-(arch,seed) T0 encoder cache; uses "
                              "their released load_pretrain mechanism. OFF by "
                              "default (Phase 4 owner decision pending).")
+    parser.add_argument("--workers", type=int, default=0, metavar="N",
+                        help="DataLoader workers forced by the guard patch "
+                             "(0 = proven in-process default; >0 owner-"
+                             "authorized 2026-07-17, persistent_workers "
+                             "forced False — see the patch comment).")
     args = parser.parse_args(argv)
+    if args.workers < 0:
+        parser.error("--workers must be >= 0")
+    global _FORCED_WORKERS
+    _FORCED_WORKERS = int(args.workers)
 
     cell_dir = Path(args.out).resolve()
     config_dict = build_run_config(
@@ -320,6 +355,7 @@ def main(argv=None) -> int:
         "final_class_acc": records[-1]["class_acc"],
         "final_clust_acc": records[-1]["clust_acc"],
         "wall_time_seconds": time.perf_counter() - t_run,
+        "dataloader_workers": _FORCED_WORKERS,
         "torch": torch.__version__,
         "cuda_device": torch.cuda.get_device_name(0),
     }

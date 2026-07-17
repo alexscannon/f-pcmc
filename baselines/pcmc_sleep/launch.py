@@ -65,6 +65,7 @@ def run_cell(
     force: bool = False,
     pretrain_cache: str | Path | None = None,
     timeout: float | None = None,
+    workers: int = 0,
 ) -> Path:
     """Launch one driver run; returns the cell dir. Raises CalledProcessError
     on a failed run and TimeoutExpired on a hung one (the smoke test uses the
@@ -91,6 +92,8 @@ def run_cell(
         cmd.append("--force")
     if pretrain_cache is not None:
         cmd += ["--pretrain-cache", str(pretrain_cache)]
+    if workers:
+        cmd += ["--workers", str(int(workers))]
     subprocess.run(cmd, cwd=REPO_ROOT, check=True, timeout=timeout)
     return cell
 
@@ -104,6 +107,7 @@ def main(argv=None) -> int:
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--pretrain-cache", default=None)
+    parser.add_argument("--workers", type=int, default=0)
     args = parser.parse_args(argv)
     cell = run_cell(
         args.arch,
@@ -113,6 +117,7 @@ def main(argv=None) -> int:
         smoke=args.smoke,
         force=args.force,
         pretrain_cache=args.pretrain_cache,
+        workers=args.workers,
     )
     print(cell)
     return 0

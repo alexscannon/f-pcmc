@@ -318,6 +318,46 @@ def test_matrix_budget_projection():
     assert miss == rm.PRETRAIN_PROJECTION_H + rm.WAKE_EVAL_PROJECTION_H
 
 
+# ------------------------------------------- driver dataloader guard [U]
+
+
+def test_dataloader_guard_workers_modes():
+    """The driver's DataLoader guard (deadlock mitigation, HANDOFF_PHASE2 §5;
+    --workers owner-authorized 2026-07-17): workers=0 forces in-process
+    loading and strips worker-only kwargs; workers>0 forces
+    persistent_workers=False so upstream's early iterator abandonment
+    (pcmc_layer.py:341-343) tears workers down instead of deadlocking.
+    NOTE: importing the driver rebinds torch.utils.data.DataLoader for this
+    process — nothing else in the CPU suite constructs DataLoaders."""
+    import torch
+
+    from baselines.pcmc_sleep import driver
+
+    ds = torch.utils.data.TensorDataset(torch.zeros(8, 3))
+    # Default: in-process, worker-only kwargs stripped (their pretrain passes
+    # persistent_workers=True which raises with num_workers=0 if kept).
+    loader = torch.utils.data.DataLoader(
+        ds, batch_size=4, num_workers=6, persistent_workers=True,
+        prefetch_factor=2,
+    )
+    assert loader.num_workers == 0
+    try:
+        driver._FORCED_WORKERS = 8
+        # Big training loaders (>= _WORKERS_MIN_BS) get the worker pool...
+        loader = torch.utils.data.DataLoader(
+            ds, batch_size=256, num_workers=0, persistent_workers=True,
+            prefetch_factor=2,
+        )
+        assert loader.num_workers == 8
+        assert loader.persistent_workers is False
+        # ...but their many tiny eval loaders (bs=1) stay in-process — a
+        # worker pool per eval loader is a fork storm (observed 2026-07-17).
+        loader = torch.utils.data.DataLoader(ds, batch_size=1, num_workers=6)
+        assert loader.num_workers == 0
+    finally:
+        driver._FORCED_WORKERS = 0
+
+
 # ----------------------------------------------------------- [I] GPU smoke
 
 

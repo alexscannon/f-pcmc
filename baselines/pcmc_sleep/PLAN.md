@@ -246,6 +246,42 @@ Owner Q&A (2026-07-17, verbatim option labels):
   the deadline at the unchanged 500-epoch config, reported as an addendum;
   the 2-day deliverable is explicitly RN18-anchored.
 
+Follow-up Q&A (2026-07-17 ~23:30Z, after the 30-min contention check):
+measured basis presented — dataloader benchmark on their exact pretrain
+pipeline (transforms mirrored from pcmc_layer.py:73,86-111, run under live
+contention): workers=0 **1.876 s/batch** vs workers=8 **0.264 s/batch** (7.1×);
+and cell 1's sleep cycles GROW (cycle 1 = 4,691 iters, cycle 2 = 8,972 — the
+replay buffer expands), so sleep tails at workers=0 may miss the deadline on
+their own if growth doesn't plateau.
+
+- **Fix scope**: *"All remaining + cell-1 contingency (Recommended)"* —
+  workers=8 for seeds 43 (restart) + 44 + nosleep cells, pretrain AND sleep
+  tails; if cycle 3 confirms runaway sleep growth, cell 1 is killed and re-run
+  from its cached 28 h encoder at workers=8 rather than miss the deadline.
+  Conditioned explicitly on the deadlock re-proof smoke passing; **"if it
+  fails, everything stays at workers=0."** Seed-42's pretrain remains the
+  paper-faithful workers=0 artifact either way.
+- **Gate result v1 (FAILED)**: the blanket workers=8 smoke HUNG (2,400 s hard
+  timeout; ~87 s expected). Filesystem forensics: `final_model.pkl` was saved
+  — pretrain itself ran fine under workers — the hang is post-pretrain, where
+  their eval path constructs MANY tiny batch_size=1 loaders (pcmc.py:76-84):
+  a worker pool per eval loader is a fork storm. v1's blanket force was the
+  defect, not the workers mechanism per se.
+- **Gate v2 (bounded refinement, same rule)**: workers apply ONLY to loaders
+  with batch_size ≥ 64 (pretrain bs=256, sleep bs=512); every small loader
+  stays in-process. Re-gated by its own hard-timeout smoke; if red, hard
+  fallback to workers=0 everywhere and the timeline is re-planned honestly.
+
+Implementation (committed regardless of gate outcome; default OFF): driver
+`--workers N` sets the guard's forced worker count (persistent_workers forced
+False; big-loader-only per v2), threaded through `launch.run_cell(workers=)`
+and `run_pcmc_matrix --workers`; recorded per cell in `summary.json`
+(`dataloader_workers`) + manifest, deliberately NOT in resolved_config.yaml so
+completed cells' resumability is unaffected (execution knob, not run
+semantics; augmentation-RNG draw order moves into workers — inside the
+accepted "seeded, not bitwise" deviation, recorded). [U] test
+`test_dataloader_guard_workers_modes` pins both patch modes.
+
 Concurrency launch discipline (RAM-driven, as-executed): one driver added at a
 time with RSS/available-RAM checks between; two sleep-phase tails (~20 GB
 each) can NOT coexist on 30 GB — tails stagger. Concurrent cells are launched

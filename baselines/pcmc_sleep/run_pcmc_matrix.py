@@ -158,6 +158,7 @@ def _ok_entry(cell: Cell, cell_dir: Path, from_cache: bool,
         "wall_time_hours": round(actual_h, 3),
         "runner_observed_seconds": round(runner_seconds, 1),
         "sleep_steps_executed": summary.get("sleep_steps_executed"),
+        "dataloader_workers": summary.get("dataloader_workers", 0),
         "final_ltm_size": summary.get("final_ltm_size"),
         "final_class_acc": summary.get("final_class_acc"),
         "final_clust_acc": summary.get("final_clust_acc"),
@@ -178,6 +179,7 @@ def run_matrix(
     only: list[str] | None = None,
     force: bool = False,
     timeout: float | None = None,
+    workers: int = 0,
 ) -> tuple[dict, bool]:
     """Run the (optionally filtered) matrix serially with the shared T0 cache.
 
@@ -219,6 +221,7 @@ def run_matrix(
                 cell.arch, cell.seed,
                 sleep_on=cell.sleep_on, out_root=root,
                 force=force, pretrain_cache=cache, timeout=timeout,
+                workers=workers,
             )
         except Exception as exc:  # noqa: BLE001 — record any cell failure
             manifest["cells"][cell.key] = {
@@ -261,6 +264,9 @@ def main(argv=None) -> int:
                         help="re-run cells even if their config matches")
     parser.add_argument("--timeout", type=float, default=None,
                         help="per-cell subprocess timeout (seconds)")
+    parser.add_argument("--workers", type=int, default=0,
+                        help="forced DataLoader workers (driver --workers; "
+                             "0 = proven in-process default)")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the enumerated plan (with cache HIT/MISS "
                              "prediction) and exit — no GPU, no runs")
@@ -299,6 +305,7 @@ def main(argv=None) -> int:
     _manifest, ok = run_matrix(
         out_root=args.out_root, cache_dir=args.cache_dir,
         only=args.only, force=args.force, timeout=args.timeout,
+        workers=args.workers,
     )
     if not ok:
         print("matrix halted on a cell failure — see run_manifest.json")
