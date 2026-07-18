@@ -320,6 +320,21 @@ sleep-44 reuses the cache post-deadline); seed-43's sleep cell continues its
 pretrain (cache lands ~Jul 19 02:30Z, decision point: nosleep-43 vs letting
 sleep-43's tail start — one wake-phase driver at a time, RAM-bound).
 
+**Second OOM + the init_memory RAM constraint (2026-07-18 ~02:00–02:20Z).**
+Cell-1 attempt 4 (cache-HIT restart) was OOM-killed 30 min in, **during
+`init_memory`**: kern.log shows the driver itself at **anon-rss 26.2 GB** —
+the load-pretrain path goes straight into the vendored init_memory, which
+materializes ~360 k patches (156 in-process batches × 256 imgs × 9 patches)
+before drawing its hardcoded 2,000-sample; attempt 3 survived the same spike
+only because the box was empty. **Operational rule: a cell's first ~40 min
+(init_memory + t0 eval) needs a near-empty box (~26 GB available); the
+allocator retains ~20 GB RSS afterwards for the life of the run.** As-executed
+recovery: ns44 (1 h invested) paused to free headroom → cell-1 attempt 5
+launched (passed init, fresh t0.json tripwire) → ns44 relaunched. Known
+wrapper nit: the matrix runner's stop-and-report path printed `EXIT 0` from
+the tmux wrapper (launcher exit-code propagation) — runner-internal manifest
+status is authoritative; fix folded into the Phase-4 wrap-up.
+
 Concurrency launch discipline (RAM-driven, as-executed): one driver added at a
 time with RSS/available-RAM checks between; two sleep-phase tails (~20 GB
 each) can NOT coexist on 30 GB — tails stagger. Concurrent cells are launched
