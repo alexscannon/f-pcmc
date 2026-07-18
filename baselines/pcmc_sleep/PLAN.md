@@ -282,6 +282,44 @@ semantics; augmentation-RNG draw order moves into workers — inside the
 accepted "seeded, not bitwise" deviation, recorded). [U] test
 `test_dataloader_guard_workers_modes` pins both patch modes.
 
+**Workers gate: FINAL VERDICT RED (2026-07-18 ~01:20Z) — workers=0 is
+permanent for T17.** Gate history: v1 blanket (hung post-pretrain), v2
+big-loaders-only (hung in eval; both confounded by CPU/RAM contention), v3
+take-3 on quiet hardware with /proc classification: **CPU jiffies delta 0
+over 10 s, worker children 0 (died at spin-up), driver blocked in
+futex_do_wait** — the HANDOFF §5 deadlock signature exactly. Root cause:
+their `Layer.__init__` touches CUDA before any loader exists
+(pcmc_layer.py:113 `.to('cuda')`), so every forked DataLoader worker inherits
+a poisoned CUDA context and dies **nondeterministically** (v1/v2's workers
+survived a full pretrain; v3's died at first batch). A nondeterministic hang
+at any of dozens of loader spin-ups per run is unshippable; spawn-context
+would avoid the fork but costs ~8× dataset RAM per loader — infeasible at
+30 GB. The `--workers` flag stays in the code, default 0, as the record of
+the investigation.
+
+**Casualty (2026-07-18 ~01:15Z): cell-1 attempt 3 OOM-killed during gate
+take-1** — the gate froze the 20.5 GB wake-phase driver (SIGSTOP) while the
+smoke's 8 workers ballooned RAM on a 3.6 GB-available box; the kernel OOM
+killer chose the largest (frozen) process. Stop-and-report recorded it to the
+manifest as designed. The 28 h pretrain was already durably cached, so the
+loss is ~5 h of wake/sleep tail. Lessons now operational: never SIGSTOP a
+wake-phase driver while anything RAM-hungry launches; a persistent RAM-guard
+monitor (<2 GB available → alert) runs during all further scheduling.
+
+**Sleep-cycle runaway growth is CONFIRMED and quantified** (cell-1 attempt 3):
+cycle 1 = 4,691 iters, cycle 2 = 8,972, cycle 3 = 14,331 (~+4.7 k/cycle,
+linear in the growing replay buffer) ⇒ a full 11-cycle tail ≈ 65–70 h at
+workers=0. **Consequence: no sleep cell can complete inside any 48 h window;
+the sleep column completes only past the deadline.** Deadline replan under
+workers=0 (launched 2026-07-18 01:30Z): cell-1 restarted from cache
+(attempt 4, wake+tail, accumulates checkpoint JSONs incrementally — partial
+sleep curve at the deadline, completion ~Jul 20); **nosleep-44 launched
+FIRST for seed 44** (order inversion: either variant can produce the shared
+cache; the nosleep cell's ~4 h post-pretrain tail is completable, and
+sleep-44 reuses the cache post-deadline); seed-43's sleep cell continues its
+pretrain (cache lands ~Jul 19 02:30Z, decision point: nosleep-43 vs letting
+sleep-43's tail start — one wake-phase driver at a time, RAM-bound).
+
 Concurrency launch discipline (RAM-driven, as-executed): one driver added at a
 time with RSS/available-RAM checks between; two sleep-phase tails (~20 GB
 each) can NOT coexist on 30 GB — tails stagger. Concurrent cells are launched
