@@ -335,6 +335,26 @@ wrapper nit: the matrix runner's stop-and-report path printed `EXIT 0` from
 the tmux wrapper (launcher exit-code propagation) — runner-internal manifest
 status is authoritative; fix folded into the Phase-4 wrap-up.
 
+**Final overnight triage (2026-07-18 ~04:00–12:00Z), as-executed.**
+nosleep-42 COMPLETED 04:10Z (first full PCMC cell: 1.7 h wall post-cache,
+45/45 checkpoints, final class 17.2 / clust 22.3, LTM 1004 — flat ~17 across
+the whole stream). Cell-1 attempt 6 OOM'd 4 min in (my sequencing error:
+resumed seed-43 — whose swapped pages began rehydrating — simultaneously with
+the init ramp); attempt 7 relaunched under the proven recipe (43 frozen for
+the init window, tripwire auto-resumes) and is the run of record. Recurring
+lesson encoded in the tripwires: monitoring pgreps use bracketed patterns
+(`seed 4[2]`) — a plain pattern matches the checking process itself and
+blinds death-detection. Cell-1's checkpoint-eval transients spike ~1–2 GB
+over its retained ~25 GB balloon; when a spike refused to clear (55 min) with
+seed-43's frozen footprint sitting on ~4 GB of the swap those spikes need,
+**seed-43's 11 h pretrain was terminated** (its cache was landing
+post-deadline regardless; a frozen all-or-nothing pretrain is reboot-fragile
+and was starving the deadline-critical run). Post-deadline plan: rerun seed-43
+(nosleep-first, then sleep) and seed-44's sleep cell serially on the then-
+dedicated box; sleep-cycle growth re-measured on attempt 7: 4,688 → 14,753 →
+19,686 iters (faster than attempt 3 — RNG divergence in promotions), so
+sleep-cell tails may exceed the ~65–70 h projection.
+
 Concurrency launch discipline (RAM-driven, as-executed): one driver added at a
 time with RSS/available-RAM checks between; two sleep-phase tails (~20 GB
 each) can NOT coexist on 30 GB — tails stagger. Concurrent cells are launched
