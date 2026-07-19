@@ -373,6 +373,33 @@ Runs:
   reuses the cached encoder (cache HIT). RN50 peak VRAM to be measured on the
   first RN50 cell (Q12) before its batch size is touched.
 
+## Owner decision (2026-07-19, mid-Phase-4): the main axis is NOVELTY DETECTION
+
+In-session owner ruling, recorded verbatim: *"The whole point is to test the
+novelty detection performance, not general performance. The ResNet was
+pretrained on a subset of the stream's data so that it had a baseline IND
+performance. The main question is how well do the two systems perform on
+novelty detection."*
+
+Consequences for Phase 5 (re-registered framing):
+- **Headline analysis = novelty-centric**: per-checkpoint slices of the
+  paper-protocol metrics into T0 (labels 0–79) vs held-out-novel (labels
+  80–99) vs synthetic-novel (cluster labels 100+) classes, each system
+  **normalized by its own T0-class (IND) baseline** — the T0 pretrain / T0
+  LTM-init exist precisely to give both systems an IND grounding, so the
+  novelty question is the delta on top of it. This normalization is also the
+  control for the encoder-familiarity (DINOv3-saw-CIFAR) objection.
+- **Concept-formation dynamics at novelty onsets** join the headline: exact
+  for F-PCMC (events.jsonl seeds/promotions; §7.3 detection metrics from cell
+  summaries), coarse for PCMC (phase-end snapshot STM/LTM deltas — the Q10b
+  lossy adapter's domain). Arrival-level detection metrics remain one-sided
+  (F-PCMC only) per the structural asymmetry recorded in owner decision 3
+  (2026-07-14): released PCMC makes no per-arrival novelty decision.
+- The 2026-07-14 decision-3 paper protocol is **unchanged as data** and
+  remains the shared absolute layer; the absolute-accuracy headline (80 vs
+  17) explicitly does **not** answer the main question by itself — it
+  conflates IND representation quality with novelty handling.
+
 ## Phase 0 findings (2026-07-14)
 
 - **0.1 Alignment: PROVEN, 0 mismatches over all 63,326 rows.** Every pool
