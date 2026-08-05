@@ -86,6 +86,22 @@ REQUIRED_FILES = [
     "configs/a6_resnet50.yaml",
     # T16 — results workbook / scorecard generator
     "eval/workbook.py",
+    # T17 — sleep-retrained PCMC baseline (Phase 1 mirror, Phase 2 driver)
+    "baselines/pcmc_sleep/stream_mirror.py",
+    "baselines/pcmc_sleep/run_config.py",
+    "baselines/pcmc_sleep/p2_stream.py",
+    "baselines/pcmc_sleep/driver.py",
+    "baselines/pcmc_sleep/launch.py",
+    "baselines/pcmc_sleep/env/pyproject.toml",
+    "baselines/pcmc_sleep/env/README.md",
+    "baselines/pcmc_sleep/vendor/core/models/pcmc/pcmc_layer.py",
+    "baselines/pcmc_sleep/vendor/config/model/pcmc.yaml",
+    # T17 Phase 3 — paper-protocol evaluation parity (scorer + CLI + adapter)
+    "baselines/pcmc_sleep/fpcmc_scorer.py",
+    "baselines/pcmc_sleep/score_fpcmc.py",
+    "baselines/pcmc_sleep/pcmc_dynamics.py",
+    # T17 Phase 4 — 12-cell PCMC production matrix batch runner
+    "baselines/pcmc_sleep/run_pcmc_matrix.py",
 ]
 
 

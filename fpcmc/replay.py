@@ -66,55 +66,104 @@ def replay(
     the untouched T0 concepts).
     """
     records = read_log(log_path)
-    if not records or records[0].get("type") != "config_header":
-        raise ReplayError("log must start with a config_header record")
-    config = FPCMCConfig.from_yaml_text(yaml.safe_dump(records[0]["config"]))
+    config = _parse_header(records)
     sweeper = MergeSweeper(config, prior)
     X = np.asarray(stream_x, dtype=np.float64)
 
     for rec in records[1:]:
-        rtype = rec["type"]
-        if rtype == "assign":
-            concept = store.get(rec["concept_id"])
-            concept.add_observation(X[rec["step"]], rec["step"])
-            maybe_recompute(concept, config, prior)  # mirrors ConceptStore._assign
-        elif rtype == "seed":
-            cid = rec["concept_id"]
-            store.register(Concept.seed(  # mirrors ConceptStore._seed
-                X[rec["step"]],
-                rec["step"],
-                prior.tau,
-                prior.tau_vmf,
-                concept_id=cid,
-                rng=make_rng(config.seed, f"reservoir/{cid}"),
-                window_W=config.window_W,
-                k_max=config.K_max_refset,
-                alpha_ema=config.alpha_stm_ema,
-            ))
-        elif rtype == "evict":
-            store.remove(rec["concept_id"])
-        elif rtype == "promote":
-            concept = store.get(rec["concept_id"])
-            concept.status = "LTM"  # mirrors PromotionEvaluator._promote
-            concept.provenance = "promoted"
-            recompute_on_promotion(concept, config)
-        elif rtype == "merge":
-            survivor = store.get(rec["survivor_id"])
-            absorbed = store.get(rec["absorbed_id"])
-            if rec["kind"] == "stm_ltm":
-                sweeper.fold_pair(store, survivor, absorbed, rec["step"])
-            else:
-                out = sweeper.merge_pair(
-                    store, survivor, absorbed, rec["step"], kind=rec["kind"]
-                )
-                if out.concept_id != rec["survivor_id"]:
-                    raise ReplayError(
-                        f"step {rec['step']}: replayed merge chose survivor "
-                        f"{out.concept_id!r} but the log records "
-                        f"{rec['survivor_id']!r} — state has diverged"
-                    )
-        elif rtype == "checkpoint":
-            continue
-        else:
-            raise ReplayError(f"unknown record type {rtype!r}")
+        _apply_record(rec, store, sweeper, config, prior, X)
     return store
+
+
+def iter_checkpoint_states(
+    log_path: str | Path,
+    stream_x: np.ndarray,
+    store: ConceptStore,
+    prior: GlobalPrior,
+):
+    """Yield ``(step, store)`` at the task-0 state and after every checkpoint.
+
+    Additive T17 seam over the same event application ``replay`` performs
+    (one shared ``_apply_record``, so the semantics cannot drift): first
+    yields ``(-1, store)`` — the post-init, pre-stream state — then, for each
+    checkpoint record in the log, ``(step, store)`` with every record up to
+    and including that step applied (mutation records precede their step's
+    checkpoint record in the log — decision 26 mutation order). One pass over
+    the log reconstructs all checkpoint states.
+
+    The SAME live ``store`` object is yielded each time: consumers must read
+    (score) and resume iteration without mutating it or holding references to
+    its internals across yields. Exhausting the iterator leaves ``store``
+    equal to ``replay``'s final state.
+    """
+    records = read_log(log_path)
+    config = _parse_header(records)
+    sweeper = MergeSweeper(config, prior)
+    X = np.asarray(stream_x, dtype=np.float64)
+
+    yield -1, store
+    for rec in records[1:]:
+        _apply_record(rec, store, sweeper, config, prior, X)
+        if rec["type"] == "checkpoint":
+            yield rec["step"], store
+
+
+def _parse_header(records: list[dict]) -> FPCMCConfig:
+    if not records or records[0].get("type") != "config_header":
+        raise ReplayError("log must start with a config_header record")
+    return FPCMCConfig.from_yaml_text(yaml.safe_dump(records[0]["config"]))
+
+
+def _apply_record(
+    rec: dict,
+    store: ConceptStore,
+    sweeper: MergeSweeper,
+    config: FPCMCConfig,
+    prior: GlobalPrior,
+    X: np.ndarray,
+) -> None:
+    """Apply one event record to ``store`` (checkpoint records are no-ops)."""
+    rtype = rec["type"]
+    if rtype == "assign":
+        concept = store.get(rec["concept_id"])
+        concept.add_observation(X[rec["step"]], rec["step"])
+        maybe_recompute(concept, config, prior)  # mirrors ConceptStore._assign
+    elif rtype == "seed":
+        cid = rec["concept_id"]
+        store.register(Concept.seed(  # mirrors ConceptStore._seed
+            X[rec["step"]],
+            rec["step"],
+            prior.tau,
+            prior.tau_vmf,
+            concept_id=cid,
+            rng=make_rng(config.seed, f"reservoir/{cid}"),
+            window_W=config.window_W,
+            k_max=config.K_max_refset,
+            alpha_ema=config.alpha_stm_ema,
+        ))
+    elif rtype == "evict":
+        store.remove(rec["concept_id"])
+    elif rtype == "promote":
+        concept = store.get(rec["concept_id"])
+        concept.status = "LTM"  # mirrors PromotionEvaluator._promote
+        concept.provenance = "promoted"
+        recompute_on_promotion(concept, config)
+    elif rtype == "merge":
+        survivor = store.get(rec["survivor_id"])
+        absorbed = store.get(rec["absorbed_id"])
+        if rec["kind"] == "stm_ltm":
+            sweeper.fold_pair(store, survivor, absorbed, rec["step"])
+        else:
+            out = sweeper.merge_pair(
+                store, survivor, absorbed, rec["step"], kind=rec["kind"]
+            )
+            if out.concept_id != rec["survivor_id"]:
+                raise ReplayError(
+                    f"step {rec['step']}: replayed merge chose survivor "
+                    f"{out.concept_id!r} but the log records "
+                    f"{rec['survivor_id']!r} — state has diverged"
+                )
+    elif rtype == "checkpoint":
+        return
+    else:
+        raise ReplayError(f"unknown record type {rtype!r}")

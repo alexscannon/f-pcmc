@@ -48,6 +48,40 @@ Verification: from `lib/`, `git hash-object <file>` must reproduce the hash
 column exactly (T14's `test_v1_untouched` applies the same technique to the
 `baselines/` set).
 
+## `baselines/pcmc_sleep/vendor/` — the T17 vendored PCMC (verbatim, read-only)
+
+Vendored 2026-07-14 for T17 Phase 2 (owner-approved location for this record:
+this file, Q5 in the Phase 2 Q&A — T14 precedent). Byte-identical copies from
+the `reference/pcmc` submodule (upl-benchmark) at its pinned commit
+`e77f5f7ae8fa7d2f12b68e45e654bc2b5ca29e86`, extracted directly from that
+commit's blobs (`git cat-file blob <pin>:<path>`). The set is exactly the
+import closure of `core.models.pcmc.pcmc.PCMC` plus the two released config
+YAMLs kept as fidelity reference (never loaded by the driver). Verified
+closure notes: upstream `core/models/pcmc/sleep_algos.py` is empty (0 bytes)
+and imported by nothing, so it is NOT vendored; upstream has no
+`core/stream/__init__.py` (namespace subpackage — none is invented here);
+`core/stream/dataset.py` IS in the closure (`pcmc_layer` imports
+`NumpyDataset`). `baselines/pcmc_sleep/{driver,p2_stream,run_config,launch,
+stream_mirror}.py` are the only shims and are ours. **Do not edit anything
+under `baselines/pcmc_sleep/vendor/`** — `test_pcmc_vendor_untouched` asserts
+every hash below.
+
+| File (path under `baselines/pcmc_sleep/vendor/` == path in `reference/pcmc`) | Blob hash |
+|---|---|
+| `core/__init__.py` | `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` |
+| `core/utils.py` | `892ba066d57cb3a57b3b22d9443cc846bd51ff48` |
+| `core/models/__init__.py` | `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` |
+| `core/models/pcmc/__init__.py` | `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391` |
+| `core/models/pcmc/pcmc.py` | `cc0f8eb7a0b16521d4c776e5cb29f9510e24e7de` |
+| `core/models/pcmc/pcmc_layer.py` | `19e5b1322a071511978f95d22e6229e3243be02b` |
+| `core/models/pcmc/encoders.py` | `7052d04df821c3d7edbb8153e6debb1ba88f2654` |
+| `core/stream/collate.py` | `0edb3b79e61104dff86ba0722fa742701ad8fc00` |
+| `core/stream/dataset.py` | `04d1f2e370266927f9a60038895d003ce0cea6d5` |
+| `core/stream/samplers.py` | `0ca64b96280d92cc729b68e5734360ee114b7e2d` |
+| `config/main.yaml` | `f4ba0c2fc79000e59eb3d7d52562303d97977e7f` |
+| `config/model/pcmc.yaml` | `bd0e6a06927df367883b22e6f66ca065111d7f10` |
+
+
 ## `baselines/v1/` — the T14 vendored v1 streaming harness (verbatim, read-only)
 
 Vendored 2026-07-13 for T14 (owner-approved location for this record: this
